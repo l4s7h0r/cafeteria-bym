@@ -1,0 +1,43 @@
+/* Paleta heredada del prototipo Papa Quique (pizarra + mostaza) */
+:root{
+  --pizarra:#1E2B26;--pizarra2:#26362F;--linea:#3C4F45;--tiza:#F5F5F0;--tiza2:#C9D3CD;
+  --mostaza:#F2B632;--fondo:#F3F4F1;--card:#FFFFFF;--borde:#E1E4DF;--texto:#1E2B26;--suave:#5B6660;
+  --verde:#2D6A4F;--verdeClaro:#E3F2EA;--naranjo:#F0A04B;--naranjoClaro:#FFF1DE;--rojo:#B42318;--rojoClaro:#FDECEA;--r:16px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--fondo);color:var(--texto);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+body{font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3,p{margin:0}
+a{color:inherit}
+.display{font-weight:800;letter-spacing:-.02em}
+.tiza{color:var(--mostaza);font-size:13px}
+.app{min-height:100vh;display:flex;flex-direction:column}
+.top{background:var(--pizarra);color:var(--tiza);padding:12px 16px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+.logo{width:40px;height:40px;border-radius:999px;background:var(--mostaza);color:var(--pizarra);display:flex;align-items:center;justify-content:center;font-weight:800}
+.brand{display:flex;flex-direction:column}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding:8px 16px;background:var(--pizarra2);position:sticky;top:64px;z-index:4}
+.tabs a{white-space:nowrap;text-decoration:none;color:var(--tiza2);padding:8px 12px;border-radius:999px;font-size:14px}
+.tabs a.active{background:var(--mostaza);color:var(--pizarra);font-weight:700}
+.page{padding:16px;max-width:1100px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border:1px solid var(--borde);border-radius:var(--r);padding:16px}
+.card.link{display:block;text-decoration:none;font-weight:600}
+.card.dark{background:var(--pizarra);color:var(--tiza)}
+.stack{display:flex;flex-direction:column;gap:12px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.between{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.muted{color:var(--suave);font-size:13px}
+.kpi{font-size:24px;font-weight:800}
+.btn{border:0;border-radius:12px;padding:10px 14px;background:var(--pizarra);color:var(--tiza);font-weight:600;cursor:pointer}
+.btn.alt{background:var(--mostaza);color:var(--pizarra)}
+.btn.ghost{background:transparent;border:1px solid var(--borde);color:var(--texto)}
+.input{width:100%;border:1px solid var(--borde);border-radius:10px;padding:10px 12px;background:#fff}
+.chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--verdeClaro);color:var(--verde)}
+.chip.off{background:#EEF0ED;color:var(--suave)}
+.chip.warn{background:var(--naranjoClaro);color:#A3460F}
+.chip.bad{background:var(--rojoClaro);color:var(--rojo)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--borde)}
+th{font-size:12px;color:var(--suave);font-weight:600}
+.scroll-x{overflow-x:auto}

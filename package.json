@@ -1,0 +1,26 @@
+{
+  "name": "cafeteria-bym",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run seed && (bun --watch server/index.ts & vite)",
+    "server": "bun server/index.ts",
+    "seed": "bun server/seed.ts",
+    "web": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "@types/react": "^19.3.1",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}

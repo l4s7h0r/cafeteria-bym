@@ -1,0 +1,56 @@
+/* Estilos propios de la isla contabilidad (prefijo cb-) */
+.cb-seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:4px;padding:4px;border-radius:14px;background:#E6E9E4}
+.cb-seg button{min-height:40px;border-radius:10px;border:0;background:transparent;font-size:14px;font-weight:500;padding:0 6px;cursor:pointer}
+.cb-seg button[aria-pressed="true"]{background:#fff;font-weight:700;box-shadow:0 1px 3px rgba(30,43,38,.18)}
+.cb-chips{display:flex;gap:6px;flex-wrap:wrap}
+.cb-chips button{min-height:38px;padding:0 14px;border-radius:999px;border:1px solid #D5DAD6;background:#fff;font-size:13px;font-weight:500;cursor:pointer}
+.cb-chips button[aria-pressed="true"]{background:var(--mostaza);border-color:var(--mostaza);font-weight:700}
+.cb-chips.scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+.cb-chips.scroll button{flex-shrink:0}
+.cb-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.cb-tile{border-radius:18px;padding:14px 16px;display:flex;flex-direction:column;gap:4px;border:1px solid var(--borde);background:#fff;min-width:0}
+.cb-tile .lbl{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
+.cb-tile .val{font-weight:800;font-size:22px;letter-spacing:-.02em;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cb-tile.ing .lbl{color:#1D4D37}
+.cb-tile.gas .lbl{color:#A3460F}
+.cb-tile.dif{grid-column:span 2;background:var(--pizarra);color:var(--tiza);border-color:var(--pizarra)}
+.cb-tile.dif .lbl{color:var(--tiza2)}
+.cb-tile.dif .val{font-size:34px;color:var(--mostaza)}
+.cb-tile.dif .muted{color:var(--tiza2)}
+.cb-dot{width:10px;height:10px;border-radius:3px;display:inline-block;flex-shrink:0}
+.cb-h2{font-size:16px;font-weight:700}
+.cb-field{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--suave)}
+.cb-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cb-form .span2{grid-column:span 2}
+.cb-monto{font-size:26px;font-weight:800;letter-spacing:-.02em;padding:10px 12px}
+.cb-big{min-height:52px;width:100%;font-size:16px;border-radius:14px}
+.cb-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.cb-list>li{padding:11px 0;border-top:1px solid #EEF0EC;display:flex;gap:12px;align-items:center}
+.cb-list>li:first-child{border-top:0;padding-top:2px}
+.cb-ic{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px}
+.cb-ic.ing{background:var(--verdeClaro)}
+.cb-ic.gas{background:var(--naranjoClaro)}
+.cb-grow{flex:1;min-width:0}
+.cb-name{font-size:14px;font-weight:700;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cb-amount{font-size:15px;font-weight:700;white-space:nowrap}
+.cb-pos{color:#1D4D37}
+.cb-neg{color:#A3460F}
+.cb-x{width:34px;height:34px;border-radius:999px;border:1px solid var(--borde);background:#fff;color:var(--suave);cursor:pointer;flex-shrink:0}
+.cb-x:hover{color:var(--rojo);border-color:var(--rojo)}
+.cb-bar{height:8px;border-radius:999px;background:#EEF0EC;overflow:hidden}
+.cb-bar>i{display:block;height:100%;border-radius:999px;background:#2E8B5E}
+.cb-rank{width:28px;height:28px;border-radius:999px;background:var(--fondo);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
+.cb-rank.r1{background:var(--mostaza)}
+.cb-msg{padding:10px 12px;border-radius:12px;font-size:14px}
+.cb-msg.ok{background:var(--verdeClaro);color:#1D4D37}
+.cb-msg.err{background:var(--rojoClaro);color:var(--rojo)}
+.cb-empty{padding:18px;text-align:center;color:var(--suave);font-size:14px}
+.cb-reparto{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.cb-reparto span{font-size:12px;background:var(--fondo);border-radius:999px;padding:3px 9px}
+@media (min-width:760px){
+  .cb-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .cb-tile.dif{grid-column:span 2}
+  .cb-cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:14px;align-items:start}
+}
+.cb-cols{display:flex;flex-direction:column;gap:14px}
+@media (min-width:760px){.cb-cols{display:grid}}
