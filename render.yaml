@@ -1,9 +1,0 @@
-# Blueprint de Render: crea el servicio web gratis desde este repo.
-services:
-  - type: web
-    name: cafeteria-bym-demo
-    runtime: docker
-    plan: free
-    branch: main
-    healthCheckPath: /health
-    autoDeploy: true

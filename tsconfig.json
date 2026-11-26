@@ -5,5 +5,5 @@
     "types": ["bun"], "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "allowImportingTsExtensions": true
   },
-  "include": ["server", "web/src", "shared"]
+  "include": ["api", "server", "web/src", "shared"]
 }
