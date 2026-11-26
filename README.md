@@ -21,7 +21,7 @@ Software de gestión para cafeterías, **multi-cliente** y vendido por **planes*
 | **Reportes** | Resumen diario, semanal y mensual, con comparación contra el periodo anterior | Contabilidad |
 | **Reservas** | Mesas, agenda del día, ocupación y página pública para reservar | — |
 | **Llamado a mesa** | QR por mesa: el comensal ve el menú, llama al garzón o pide la cuenta; cola en vivo y editor del menú | — |
-| **Facturas y boletas** | Escaneo de facturas, boletas (ferretería, gas, luz, aseo…) y otros comprobantes; todo queda como egreso en su categoría. Catálogo de productos con costo y alertas de alza | Contabilidad |
+| **Facturas y boletas** | Escaneo con foto del celular o archivo (OCR con Claude) de facturas, boletas (ferretería, gas, luz, aseo…) y otros comprobantes; todo queda como egreso en su categoría. Catálogo de productos con costo y alertas de alza | Contabilidad |
 | **Plano del local** | Editor visual: el dueño dibuja la forma del local y ubica mesas, barra, baños, terraza. El cliente elige mesa al reservar y ve "estás aquí" al escanear el QR. Vista en vivo de mesas libres, reservadas y llamando | — (se conecta con Reservas y Llamado si están) |
 
 Además incluye un **dashboard de administración interna** (`/admin`) para el equipo que vende el software: MRR, clientes por plan, matriz de qué cliente tiene cada isla, cambio de plan o estado, y add-ons o bloqueos por cliente.
@@ -88,7 +88,7 @@ Bun · bun:sqlite · React 19 · Vite · TypeScript · React Router. Sin librer�
 ## Pendiente
 
 - Login y permisos (hoy la administración está abierta).
-- OCR real para facturas: reemplazar `extraerFactura()` en `server/modules/facturas/`.
+- OCR real para facturas: hecho con Claude (visión) y copia a Google Sheets; configuración en `docs/ocr-y-planilla.md`.
 - Validar precios contra la competencia.
 - Islas futuras: inventario, fidelización, delivery, boleta electrónica SII, turnos.
 

@@ -1,8 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { ServerModule, Tenant } from "../../core/types.ts";
 import { HttpError } from "../../core/router.ts";
+import { ErrorOcr, leerConClaude, OCR_DISPONIBLE, tipoArchivoSoportado, type LecturaOcr } from "./ocr.ts";
+import { enviarAPlanilla, PLANILLA_CONFIGURADA } from "./planilla.ts";
 
-// Isla "facturas": "escaneo" de documentos de gasto (OCR simulado) + catálogo de productos con historial de costos.
+// Isla "facturas": escaneo de documentos de gasto (OCR real con Claude si hay ANTHROPIC_API_KEY; si no, simulado) + catálogo de productos con historial de costos.
 // Documentos: factura de proveedor, boleta (ferretería, supermercado, gas, luz…) u otro comprobante (recibo, vale, flete).
 // Todos se registran como egreso. Sólo facturas y boletas de insumos alimentan el catálogo de productos.
 // Requiere la isla contabilidad (plan): al confirmar escribe el egreso en contabilidad_egresos SI esa tabla existe.
@@ -203,6 +205,38 @@ export function extraerFactura(entrada: { archivo?: string; bytes?: number; semi
     condicion_pago: r() < 0.6 ? "30 días" : "Contado",
     lineas, confianza: Math.round((0.88 + r() * 0.11) * 100) / 100,
     motor: "simulado-v1", archivo: entrada.archivo ?? null,
+  };
+}
+
+// Convierte la lectura del OCR real al mismo formato que usa la pantalla de revisión
+const MAX_BYTES = 4_000_000; // límite de cuerpo de las funciones de Vercel (~4,5 MB)
+export function desdeOcr(o: LecturaOcr, archivo: string, motor: string): FacturaExtraida {
+  const tipo = tipoDoc(o.tipo_doc);
+  const n = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+  const lineas: LineaExtraida[] = (Array.isArray(o.lineas) ? o.lineas : [])
+    .filter((l) => String(l?.producto ?? "").trim())
+    .map((l) => {
+      const cantidad = Number(l.cantidad) > 0 ? Number(l.cantidad) : 1;
+      const precio = n(l.precio_unitario) || (n(l.total) ? Math.round(n(l.total) / cantidad) : 0);
+      return { producto: String(l.producto).trim(), cantidad, unidad: String(l.unidad ?? "").trim() || "unidad", precio_unitario: precio, total: n(l.total) || Math.round(precio * cantidad) };
+    });
+  const suma = lineas.reduce((a, l) => a + l.total, 0);
+  let neto = n(o.neto), iva = n(o.iva), total = n(o.total);
+  if (tipo === "factura") {
+    if (!neto) neto = total ? Math.round(total / (1 + IVA)) : suma;
+    if (!iva) iva = Math.round(neto * IVA);
+    if (!total) total = neto + iva;
+  } else {
+    total = total || neto || suma; neto = total; iva = 0;
+  }
+  const egreso = tipo === "factura" && !o.categoria_egreso ? "insumos" : catEgreso(o.categoria_egreso);
+  return {
+    tipo_doc: tipo, categoria_egreso: egreso,
+    proveedor: String(o.proveedor ?? "").trim(), rut: String(o.rut ?? "").trim(), giro: String(o.giro ?? "").trim(),
+    folio: String(o.folio ?? "").trim(), fecha: /^\d{4}-\d{2}-\d{2}$/.test(o.fecha ?? "") ? o.fecha : hoy(),
+    categoria: String(o.categoria ?? "").trim() || CAT_EGRESO_LABEL[egreso],
+    neto, iva, total, condicion_pago: String(o.condicion_pago ?? "").trim() || "Contado", lineas,
+    confianza: Math.min(1, Math.max(0, Number(o.confianza) || 0)), motor, archivo,
   };
 }
 
@@ -461,19 +495,35 @@ const mod: ServerModule = {
     {
       // "Escanear": acepta multipart (foto/PDF) o JSON {ejemplo:true}. No guarda nada: devuelve lo leído para revisar.
       method: "POST", path: "/escanear", handler: async (ctx) => {
-        let archivo: string | null = null, bytes = 0, tipo: TipoDoc | undefined;
+        let archivo: string | null = null, bytes = 0, tipo: TipoDoc | undefined, subido: File | null = null;
         const ct = ctx.req.headers.get("content-type") ?? "";
         if (ct.includes("multipart/form-data")) {
           const form = await ctx.req.formData();
           const f = form.get("archivo");
-          if (f && typeof f !== "string") { archivo = f.name; bytes = f.size; }
+          if (f && typeof f !== "string") { archivo = f.name || "foto.jpg"; bytes = f.size; subido = f; }
           const t = form.get("tipo"); if (TIPOS_DOC.includes(t as TipoDoc)) tipo = t as TipoDoc;
         } else {
           const b = await ctx.req.json().catch(() => ({} as any));
           if (b?.archivo) { archivo = String(b.archivo); bytes = Number(b.bytes) || 0; }
           if (TIPOS_DOC.includes(b?.tipo)) tipo = b.tipo;
         }
-        const datos = extraerFactura({ archivo: archivo ?? undefined, bytes, semilla: ctx.tenant.id * 31 + (archivo ? 0 : Date.now() % 997), tipo });
+        let datos: FacturaExtraida;
+        const ocrReal = !!subido && OCR_DISPONIBLE();
+        if (subido && ocrReal) {
+          if (bytes > MAX_BYTES) throw new HttpError(413, "El archivo pesa más de 4 MB: prueba con una foto más liviana o un PDF más corto");
+          if (!tipoArchivoSoportado(subido.type)) throw new HttpError(415, "Formato no soportado: sube una foto (JPG, PNG o WEBP) o un PDF");
+          try {
+            const lectura = await leerConClaude(await subido.arrayBuffer(), subido.type, tipo ? TIPO_DOC_LABEL[tipo] : undefined);
+            if (!lectura.legible) throw new HttpError(422, `No pudimos leer el documento: ${lectura.observacion || "la imagen no se ve clara"}. Prueba con otra foto, con buena luz y sin cortar los bordes.`);
+            datos = desdeOcr(lectura, archivo!, "claude");
+            if (tipo && tipo !== datos.tipo_doc) datos = { ...datos, tipo_doc: tipo };
+          } catch (e) {
+            if (e instanceof ErrorOcr) throw new HttpError(502, e.message);
+            throw e;
+          }
+        } else {
+          datos = extraerFactura({ archivo: archivo ?? undefined, bytes, semilla: ctx.tenant.id * 31 + (archivo ? 0 : Date.now() % 997), tipo });
+        }
         // Comparación contra el último costo conocido, para avisar antes de confirmar
         const lineas = datos.lineas.map((l) => {
           const p = ctx.db.query("SELECT ultimo_costo, ultima_compra FROM facturas_productos WHERE tenant_id = ? AND clave = ?")
@@ -482,7 +532,7 @@ const mod: ServerModule = {
           const catalogo = datos.categoria_egreso === "insumos";
           return { ...l, costo_anterior: p?.ultimo_costo ?? null, variacion_pct: variacion, alza: catalogo && variacion !== null && variacion > ALZA_PCT, nuevo: catalogo && !p };
         });
-        return { ...datos, lineas, alza_pct: ALZA_PCT, ejemplo: !archivo };
+        return { ...datos, lineas, alza_pct: ALZA_PCT, ejemplo: !archivo, ocr_real: ocrReal };
       },
     },
     {
@@ -500,7 +550,18 @@ const mod: ServerModule = {
         const neto = Math.round(base);
         if (neto <= 0) throw new HttpError(400, tipo === "factura" ? "El neto debe ser mayor a cero" : "El total debe ser mayor a cero");
         if (!lineas.length) lineas = [{ producto: String(b.descripcion ?? "").trim() || `Gasto ${b.proveedor}`, cantidad: 1, unidad: "unidad", precio_unitario: neto, total: neto }];
-        return registrarFactura(ctx.db, ctx.tenant.id, { ...b, tipo_doc: tipo, lineas, neto, total: tipo === "factura" ? b.total : neto, rut: String(b.rut ?? "") });
+        const r = registrarFactura(ctx.db, ctx.tenant.id, { ...b, tipo_doc: tipo, lineas, neto, total: tipo === "factura" ? b.total : neto, rut: String(b.rut ?? "") });
+        // Copia en la planilla de Google (si está configurada). Se espera la respuesta para avisar si falló.
+        const planilla = PLANILLA_CONFIGURADA()
+          ? await enviarAPlanilla({
+              id: r.id, cliente: ctx.tenant.nombre, tipo: r.tipo_label, fecha: b.fecha, proveedor: b.proveedor.trim(), rut: String(b.rut ?? ""),
+              folio: r.folio, categoria_egreso: CAT_EGRESO_LABEL[r.categoria_egreso], categoria: String(b.categoria ?? ""),
+              neto: r.neto, iva: r.iva, total: r.total, estado: r.estado === "pagada" ? "Pagada" : "Por pagar",
+              condicion_pago: String(b.condicion_pago ?? ""), detalle: lineas.map((l) => `${l.cantidad} ${l.unidad} ${l.producto}`).join("; "),
+              motor: String((b as any).motor ?? "manual"), confianza: b.confianza ?? null, archivo: b.archivo ?? null,
+            })
+          : { ok: false as const, motivo: "planilla de Google no configurada" };
+        return { ...r, planilla };
       },
     },
     {
@@ -566,7 +627,7 @@ const mod: ServerModule = {
         const proveedores = db.query(`SELECT proveedor, COUNT(*) AS facturas, COALESCE(SUM(total),0) AS total FROM facturas_facturas
           WHERE tenant_id = ? AND fecha >= date('now','localtime','-90 days') GROUP BY proveedor ORDER BY total DESC`).all(tid);
         const contabilidad = (() => { try { return !!(db.query("PRAGMA table_info('contabilidad_egresos')").all() as any[]).length; } catch { return false; } })();
-        return { por_pagar: porPagar, mes, por_tipo: Object.fromEntries(TIPOS_DOC.map((t) => [t, porTipo.find((x) => x.tipo_doc === t) ?? { n: 0, monto: 0 }])), alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
+        return { ocr_real: OCR_DISPONIBLE(), planilla: PLANILLA_CONFIGURADA(), por_pagar: porPagar, mes, por_tipo: Object.fromEntries(TIPOS_DOC.map((t) => [t, porTipo.find((x) => x.tipo_doc === t) ?? { n: 0, monto: 0 }])), alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
       },
     },
   ],
