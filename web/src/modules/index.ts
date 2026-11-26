@@ -5,5 +5,6 @@ import reportes from "./reportes";
 import reservas from "./reservas";
 import llamado from "./llamado";
 import facturas from "./facturas";
+import plano from "./plano";
 
-export const clientModules: ClientModule[] = [contabilidad, reportes, reservas, llamado, facturas];
+export const clientModules: ClientModule[] = [contabilidad, reportes, reservas, llamado, facturas, plano];

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ClientModule, ModuleProps } from "../../core/types";
-import { makeApi } from "../../core/api";
+import type { Api, ClientModule, ModuleProps } from "../../core/types";
+import { clp, makeApi } from "../../core/api";
+import PlanoSvg, { usePlanoPublico } from "../../core/PlanoSvg";
 
-// Isla "llamado": cola en vivo de llamados a la mesa + QR por mesa + página pública que ve el comensal.
+// Isla "llamado": cola en vivo de llamados a la mesa + QR por mesa + menú + página pública que ve el comensal.
 
 type Tipo = "garzon" | "cuenta" | "otro";
 const ICONO: Record<Tipo, string> = { garzon: "🙋", cuenta: "🧾", otro: "💬" };
@@ -16,6 +17,7 @@ interface Cola {
   hoy: { total: number; porTipo: Record<Tipo, number>; promedio_respuesta_seg: number | null };
 }
 interface MesaL { id: number; codigo: string; nombre: string; zona: string }
+interface ItemMenu { id: number; categoria: string; nombre: string; descripcion: string | null; precio: number; disponible: number }
 
 const espera = (seg: number) => (seg < 60 ? `${seg}s` : `${Math.floor(seg / 60)} min ${seg % 60}s`);
 const minutos = (seg: number | null) => (seg === null ? "—" : seg < 60 ? `${seg}s` : `${Math.round(seg / 60)} min`);
@@ -23,7 +25,7 @@ const hora = (s: string) => s.slice(11, 16);
 
 // ---------------- Pantalla interna ----------------
 function Pantalla({ tenant, api }: ModuleProps) {
-  const [vista, setVista] = useState<"cola" | "qr">("cola");
+  const [vista, setVista] = useState<"cola" | "qr" | "menu">("cola");
   const [cola, setCola] = useState<Cola | null>(null);
   const [mesas, setMesas] = useState<MesaL[]>([]);
   const [err, setErr] = useState("");
@@ -57,6 +59,7 @@ function Pantalla({ tenant, api }: ModuleProps) {
       <div className="row">
         <button className={vista === "cola" ? "btn alt" : "btn ghost"} onClick={() => setVista("cola")}>Cola en vivo</button>
         <button className={vista === "qr" ? "btn alt" : "btn ghost"} onClick={() => setVista("qr")}>QR de las mesas</button>
+        <button className={vista === "menu" ? "btn alt" : "btn ghost"} onClick={() => setVista("menu")}>📖 Menú</button>
       </div>
 
       {err && <div className="card" style={{ borderColor: "var(--rojo)", color: "var(--rojo)" }}>{err}</div>}
@@ -133,6 +136,7 @@ function Pantalla({ tenant, api }: ModuleProps) {
       )}
 
       {vista === "qr" && <VistaQR slug={tenant.slug} mesas={mesas} nombreLocal={tenant.nombre} />}
+      {vista === "menu" && <EditorMenu api={api} slug={tenant.slug} mesa={mesas[0]?.codigo} />}
     </div>
   );
 }
@@ -167,7 +171,7 @@ function VistaQR({ slug, mesas, nombreLocal }: { slug: string; mesas: MesaL[]; n
             <p className="muted">{m.zona}</p>
             <img alt={`QR de ${m.nombre}`} style={{ width: "100%", maxWidth: 190, height: "auto", margin: "8px auto 0" }}
               src={`/api/m/llamado/qr/${encodeURIComponent(m.codigo)}?t=${slug}&base=${base}&escala=6`} />
-            <p style={{ fontWeight: 700, marginTop: 6 }}>Escanea para llamar al garzón</p>
+            <p style={{ fontWeight: 700, marginTop: 6 }}>Escanea para ver el menú y llamar al garzón</p>
             <p className="muted" style={{ fontSize: 11 }}>{nombreLocal} · mesa {m.codigo}</p>
           </div>
         ))}
@@ -177,10 +181,112 @@ function VistaQR({ slug, mesas, nombreLocal }: { slug: string; mesas: MesaL[]; n
   );
 }
 
+// ---------------- Menú (interno) ----------------
+function EditorMenu({ api, slug, mesa }: { api: Api; slug: string; mesa?: string }) {
+  const [items, setItems] = useState<ItemMenu[]>([]);
+  const [nuevo, setNuevo] = useState({ categoria: "", nombre: "", precio: "", descripcion: "" });
+  const [err, setErr] = useState("");
+  const cargar = useCallback(() => { api.get<ItemMenu[]>("/menu").then(setItems).catch((e) => setErr(e.message)); }, [api]);
+  useEffect(() => { cargar(); }, [cargar]);
+  const categorias = [...new Set(items.map((i) => i.categoria))];
+  const cambiar = async (it: ItemMenu, cambios: Partial<ItemMenu>) => {
+    setItems((xs) => xs.map((x) => (x.id === it.id ? { ...x, ...cambios } : x)));
+    try { await api.patch(`/menu/${it.id}`, cambios); } catch (e: any) { setErr(e.message); cargar(); }
+  };
+  const agregar = async () => {
+    setErr("");
+    try { await api.post("/menu", { ...nuevo, precio: Number(nuevo.precio) }); setNuevo({ categoria: nuevo.categoria, nombre: "", precio: "", descripcion: "" }); cargar(); }
+    catch (e: any) { setErr(e.message); }
+  };
+  return (
+    <div className="stack">
+      <div className="card">
+        <div className="between">
+          <div><h3>Menú que ve el cliente al escanear el QR</h3>
+            <p className="muted">Apaga lo que se acabó y queda oculto al tiro. Los precios se ven tal cual.</p></div>
+          {mesa && <a className="btn ghost" style={{ textDecoration: "none" }} href={`/p/${slug}/mesa/${encodeURIComponent(mesa)}?ver=menu`} target="_blank" rel="noreferrer">Ver como cliente ↗</a>}
+        </div>
+        {err && <p style={{ color: "var(--rojo)", marginTop: 8 }}>{err}</p>}
+      </div>
+      {categorias.map((c) => (
+        <div key={c} className="card">
+          <h3>{c}</h3>
+          <div className="stack" style={{ marginTop: 8, gap: 8 }}>
+            {items.filter((i) => i.categoria === c).map((it) => (
+              <div key={it.id} className="between" style={{ opacity: it.disponible ? 1 : 0.5 }}>
+                <div style={{ flex: 1 }}><b>{it.nombre}</b>{it.descripcion ? <div className="muted">{it.descripcion}</div> : null}</div>
+                <div className="row" style={{ flexWrap: "nowrap" }}>
+                  <input className="input" style={{ width: 92 }} type="number" value={it.precio} onChange={(e) => setItems((xs) => xs.map((x) => (x.id === it.id ? { ...x, precio: Number(e.target.value) } : x)))}
+                    onBlur={(e) => cambiar(it, { precio: Number(e.target.value) })} />
+                  <button className={it.disponible ? "btn" : "btn ghost"} style={{ minWidth: 96 }} onClick={() => cambiar(it, { disponible: it.disponible ? 0 : 1 })}>{it.disponible ? "Disponible" : "Agotado"}</button>
+                  <button className="btn ghost" title="Quitar" onClick={async () => { await api.del(`/menu/${it.id}`); cargar(); }}>✕</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="card">
+        <h3>Agregar al menú</h3>
+        <div className="grid" style={{ marginTop: 8 }}>
+          <input className="input" list="cats-menu" placeholder="Categoría (ej: Cafés)" value={nuevo.categoria} onChange={(e) => setNuevo({ ...nuevo, categoria: e.target.value })} />
+          <datalist id="cats-menu">{categorias.map((c) => <option key={c} value={c} />)}</datalist>
+          <input className="input" placeholder="Nombre" value={nuevo.nombre} onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })} />
+          <input className="input" placeholder="Precio" type="number" value={nuevo.precio} onChange={(e) => setNuevo({ ...nuevo, precio: e.target.value })} />
+          <input className="input" placeholder="Descripción (opcional)" value={nuevo.descripcion} onChange={(e) => setNuevo({ ...nuevo, descripcion: e.target.value })} />
+        </div>
+        <button className="btn alt" style={{ marginTop: 10 }} disabled={!nuevo.nombre || !nuevo.precio} onClick={agregar}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- Página pública del QR: /p/:slug/mesa/:mesa ----------------
 interface DatosMesa {
   local: string; mesa: { codigo: string; nombre: string; zona: string };
-  opciones: { tipo: Tipo; label: string }[]; activo: Llamado | null;
+  opciones: { tipo: Tipo; label: string }[]; activo: Llamado | null; tiene_menu?: boolean;
+}
+
+function MenuPublico({ api, onVolver, onLlamar, mesa }: { api: Api; onVolver: () => void; onLlamar: () => void; mesa: string }) {
+  const [menu, setMenu] = useState<{ categorias: { categoria: string; items: ItemMenu[] }[] } | null>(null);
+  const [err, setErr] = useState("");
+  const [cat, setCat] = useState("");
+  useEffect(() => { api.get<any>("/public/menu").then(setMenu).catch((e) => setErr(e.message)); }, [api]);
+  const cats = menu?.categorias ?? [];
+  const visibles = cat ? cats.filter((c) => c.categoria === cat) : cats;
+  return (
+    <div className="page" style={{ maxWidth: 440 }}>
+      <div className="card dark">
+        <div className="between">
+          <div><p className="tiza">{mesa}</p><h1 className="display" style={{ fontSize: 26 }}>Menú</h1></div>
+          <button className="btn alt" onClick={onVolver}>← Volver</button>
+        </div>
+      </div>
+      {!!cats.length && (
+        <div className="row" style={{ overflowX: "auto", flexWrap: "nowrap", paddingBottom: 4 }}>
+          <button className={!cat ? "btn alt" : "btn ghost"} onClick={() => setCat("")}>Todo</button>
+          {cats.map((c) => <button key={c.categoria} className={cat === c.categoria ? "btn alt" : "btn ghost"} style={{ whiteSpace: "nowrap" }} onClick={() => setCat(c.categoria)}>{c.categoria}</button>)}
+        </div>
+      )}
+      {!menu && !err && <p className="muted">Cargando menú…</p>}
+      {err && <p style={{ color: "var(--rojo)" }}>{err}</p>}
+      {visibles.map((c) => (
+        <div key={c.categoria} className="card">
+          <h3>{c.categoria}</h3>
+          <div className="stack" style={{ marginTop: 8, gap: 10 }}>
+            {c.items.map((it) => (
+              <div key={it.id} className="between" style={{ alignItems: "flex-start" }}>
+                <div><b>{it.nombre}</b>{it.descripcion ? <div className="muted">{it.descripcion}</div> : null}</div>
+                <b style={{ whiteSpace: "nowrap" }}>{clp(it.precio)}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {menu && !cats.length && <div className="card"><p className="muted">El menú no está disponible por ahora. Pregúntale al garzón.</p></div>}
+      <button className="btn alt" style={{ padding: "18px 16px", fontSize: 18 }} onClick={onLlamar}>🙋 Llamar al garzón para pedir</button>
+    </div>
+  );
 }
 
 function PaginaMesa({ slug, params }: { slug: string; params: Record<string, string> }) {
@@ -192,6 +298,9 @@ function PaginaMesa({ slug, params }: { slug: string; params: Record<string, str
   const [pidiendoOtro, setPidiendoOtro] = useState(false);
   const [enviado, setEnviado] = useState<{ mensaje: string; tipo: Tipo } | null>(null);
   const [enviando, setEnviando] = useState<Tipo | null>(null);
+  const [verMenu, setVerMenu] = useState(() => new URLSearchParams(location.search).get("ver") === "menu");
+  const plano = usePlanoPublico(slug);
+  const elMesa = plano?.elementos.find((e) => e.tipo === "mesa" && e.qr_codigo === mesa.toLowerCase());
 
   useEffect(() => {
     api.get<DatosMesa>(`/public/mesa/${encodeURIComponent(mesa)}`).then(setDatos).catch((e) => setErr(e.message));
@@ -216,6 +325,9 @@ function PaginaMesa({ slug, params }: { slug: string; params: Record<string, str
     </div>
   );
   if (!datos) return <div className="page muted">Cargando…</div>;
+
+  if (verMenu) return <MenuPublico api={api} mesa={`${datos.local} · ${datos.mesa.nombre}`} onVolver={() => setVerMenu(false)}
+    onLlamar={() => { setVerMenu(false); void llamar("garzon"); }} />;
 
   if (enviado) return (
     <div className="page" style={{ maxWidth: 440 }}>
@@ -244,6 +356,11 @@ function PaginaMesa({ slug, params }: { slug: string; params: Record<string, str
       )}
 
       <div className="stack">
+        {datos.tiene_menu !== false && (
+          <button className="btn" style={{ padding: "22px 16px", fontSize: 19, background: "var(--verde)" }} onClick={() => setVerMenu(true)}>
+            📖 Ver menú
+          </button>
+        )}
         <button className="btn alt" style={{ padding: "22px 16px", fontSize: 19 }} disabled={enviando === "garzon"} onClick={() => llamar("garzon")}>
           🙋 Llamar al garzón
         </button>
@@ -266,6 +383,13 @@ function PaginaMesa({ slug, params }: { slug: string; params: Record<string, str
       </div>
 
       {err && <p style={{ color: "var(--rojo)" }}>{err}</p>}
+      {plano && elMesa && (
+        <div className="card">
+          <h3>Estás aquí</h3>
+          <p className="muted" style={{ marginBottom: 8 }}>{datos.mesa.nombre} · {datos.mesa.zona}</p>
+          <PlanoSvg plano={plano} estados={Object.fromEntries(plano.elementos.filter((e) => e.tipo === "mesa").map((e) => [e.id, e.id === elMesa.id ? "aqui" : "atenuada"]))} />
+        </div>
+      )}
       <p className="muted" style={{ textAlign: "center" }}>Tu llamado llega al tiro a la pantalla del local.</p>
     </div>
   );

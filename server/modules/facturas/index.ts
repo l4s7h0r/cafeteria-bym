@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import type { ServerModule, Tenant } from "../../core/types.ts";
 import { HttpError } from "../../core/router.ts";
 
-// Isla "facturas": "escaneo" de facturas de proveedores (OCR simulado) + catálogo de productos con historial de costos.
-// Requiere la isla contabilidad (plan): al confirmar una factura escribe el egreso en contabilidad_egresos SI esa tabla existe.
+// Isla "facturas": "escaneo" de documentos de gasto (OCR simulado) + catálogo de productos con historial de costos.
+// Documentos: factura de proveedor, boleta (ferretería, supermercado, gas, luz…) u otro comprobante (recibo, vale, flete).
+// Todos se registran como egreso. Sólo facturas y boletas de insumos alimentan el catálogo de productos.
+// Requiere la isla contabilidad (plan): al confirmar escribe el egreso en contabilidad_egresos SI esa tabla existe.
 // Tablas propias: facturas_facturas, facturas_lineas, facturas_productos, facturas_precios.
 
 const IVA = 0.19;
@@ -94,6 +96,40 @@ export const PROVEEDORES: ProvDef[] = [
   },
 ];
 
+// Tipo de documento y categoría de egreso (mismos valores que la isla contabilidad)
+export const TIPOS_DOC = ["factura", "boleta", "otro"] as const;
+export type TipoDoc = (typeof TIPOS_DOC)[number];
+export const TIPO_DOC_LABEL: Record<TipoDoc, string> = { factura: "Factura", boleta: "Boleta", otro: "Comprobante" };
+export const CATEGORIAS_EGRESO = ["insumos", "sueldos", "arriendo", "servicios", "mantencion", "otros"] as const;
+export type CategoriaEgreso = (typeof CATEGORIAS_EGRESO)[number];
+const CAT_EGRESO_LABEL: Record<CategoriaEgreso, string> = { insumos: "Insumos", sueldos: "Sueldos", arriendo: "Arriendo", servicios: "Servicios básicos", mantencion: "Mantención", otros: "Otros" };
+const tipoDoc = (v: unknown): TipoDoc => (TIPOS_DOC.includes(v as TipoDoc) ? (v as TipoDoc) : "factura");
+const catEgreso = (v: unknown): CategoriaEgreso => (CATEGORIAS_EGRESO.includes(v as CategoriaEgreso) ? (v as CategoriaEgreso) : "insumos");
+
+// Comercios típicos de boletas y comprobantes de gasto (sin RUT obligatorio, total con IVA incluido)
+interface ComercioDef { nombre: string; rutCuerpo: number | null; giro: string; tipo: TipoDoc; egreso: CategoriaEgreso; categoria: string; items: { nombre: string; unidad: string; precio: number; cant: number[] }[] }
+export const COMERCIOS: ComercioDef[] = [
+  { nombre: "Ferretería El Tornillo", rutCuerpo: 12345678, giro: "Ferretería", tipo: "boleta", egreso: "mantencion", categoria: "Mantención",
+    items: [{ nombre: "Ampolleta LED 9W", unidad: "unidad", precio: 1990, cant: [2, 4] }, { nombre: "Silicona transparente", unidad: "unidad", precio: 3490, cant: [1, 2] },
+      { nombre: "Cinta aisladora", unidad: "unidad", precio: 890, cant: [1, 3] }, { nombre: "Llave de paso 1/2\"", unidad: "unidad", precio: 6990, cant: [1] }] },
+  { nombre: "Minimarket Don Lucho", rutCuerpo: 15678234, giro: "Almacén", tipo: "boleta", egreso: "insumos", categoria: "Compras menores",
+    items: [{ nombre: "Hielo 2 kg", unidad: "bolsa", precio: 1500, cant: [2, 4, 6] }, { nombre: "Limón", unidad: "kg", precio: 1890, cant: [1, 2] },
+      { nombre: "Leche entera caja 1 L", unidad: "unidad", precio: 1290, cant: [6, 12] }, { nombre: "Azúcar bolsa 1 kg", unidad: "unidad", precio: 1390, cant: [2, 4] }] },
+  { nombre: "Aseo Total SpA", rutCuerpo: 76321987, giro: "Artículos de aseo", tipo: "boleta", egreso: "mantencion", categoria: "Aseo",
+    items: [{ nombre: "Cloro gel 900 ml", unidad: "unidad", precio: 1790, cant: [3, 6] }, { nombre: "Lavalozas 750 ml", unidad: "unidad", precio: 2190, cant: [2, 4] },
+      { nombre: "Bolsas de basura (10 u)", unidad: "paquete", precio: 1590, cant: [3, 5] }, { nombre: "Paño multiuso (5 u)", unidad: "paquete", precio: 2490, cant: [1, 2] }] },
+  { nombre: "Gas Cordillera", rutCuerpo: 96543210, giro: "Distribución de gas", tipo: "boleta", egreso: "servicios", categoria: "Gas",
+    items: [{ nombre: "Recarga cilindro 45 kg", unidad: "unidad", precio: 89900, cant: [1, 2] }] },
+  { nombre: "Eléctrica Central (cuenta de luz)", rutCuerpo: 96800570, giro: "Electricidad", tipo: "boleta", egreso: "servicios", categoria: "Luz",
+    items: [{ nombre: "Consumo eléctrico del mes", unidad: "mes", precio: 148000, cant: [1] }] },
+  { nombre: "Imprenta Rápida Centro", rutCuerpo: 13579246, giro: "Imprenta", tipo: "boleta", egreso: "otros", categoria: "Publicidad",
+    items: [{ nombre: "Cartas plastificadas", unidad: "unidad", precio: 2500, cant: [10, 20] }, { nombre: "Volantes (500 u)", unidad: "paquete", precio: 18000, cant: [1] }] },
+  { nombre: "Fletes Express (recibo)", rutCuerpo: null, giro: "Transporte", tipo: "otro", egreso: "otros", categoria: "Fletes",
+    items: [{ nombre: "Flete de mercadería", unidad: "viaje", precio: 15000, cant: [1, 2] }] },
+  { nombre: "Gasfíter Juan Pérez (vale)", rutCuerpo: null, giro: "Servicio técnico", tipo: "otro", egreso: "mantencion", categoria: "Reparaciones",
+    items: [{ nombre: "Reparación de lavaplatos", unidad: "servicio", precio: 35000, cant: [1] }] },
+];
+
 const CATEGORIAS: Record<string, string> = {
   "Tostaduría Café Andino Ltda.": "Café", "Lácteos del Maipo S.A.": "Lácteos", "Panadería La Espiga de Oro": "Panadería",
   "Distribuidora Santa Elena Ltda.": "Abarrotes y envases", "Frutas y Verduras Lo Valledor": "Frutas y verduras",
@@ -104,15 +140,50 @@ const CATEGORIAS: Record<string, string> = {
 // ÚNICA pieza a reemplazar cuando llegue el OCR real: recibe el archivo y devuelve los datos leídos.
 export interface LineaExtraida { producto: string; cantidad: number; unidad: string; precio_unitario: number; total: number }
 export interface FacturaExtraida {
+  tipo_doc: TipoDoc; categoria_egreso: CategoriaEgreso;
   proveedor: string; rut: string; giro: string; folio: string; fecha: string; categoria: string;
   neto: number; iva: number; total: number; condicion_pago: string; lineas: LineaExtraida[];
   confianza: number; motor: string; archivo: string | null;
 }
 
-export function extraerFactura(entrada: { archivo?: string; bytes?: number; semilla?: number; ejemplo?: boolean }): FacturaExtraida {
+// Adivina el tipo de documento por el nombre del archivo (el OCR real lo leerá del documento).
+export function tipoDesdeArchivo(nombre: string | undefined, r: () => number): TipoDoc {
+  const n = (nombre ?? "").toLowerCase();
+  if (/boleta|ticket|voucher/.test(n)) return "boleta";
+  if (/recibo|vale|comprobante|gasto/.test(n)) return "otro";
+  if (/factura/.test(n)) return "factura";
+  const x = r();
+  return x < 0.55 ? "factura" : x < 0.9 ? "boleta" : "otro";
+}
+
+function extraerGasto(tipo: TipoDoc, r: () => number, archivo: string | null): FacturaExtraida {
+  const pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
+  const opciones = COMERCIOS.filter((c) => c.tipo === tipo);
+  const com = pick(opciones.length ? opciones : COMERCIOS);
+  const n = Math.min(com.items.length, 1 + Math.floor(r() * 3));
+  const elegidos = [...com.items].sort(() => r() - 0.5).slice(0, n);
+  const lineas: LineaExtraida[] = elegidos.map((p) => {
+    const cantidad = pick(p.cant);
+    const precio = redondear(p.precio * (1 + (r() - 0.4) * 0.1));
+    return { producto: p.nombre, unidad: p.unidad, cantidad, precio_unitario: precio, total: Math.round(precio * cantidad) };
+  });
+  const total = lineas.reduce((a, l) => a + l.total, 0);
+  return {
+    tipo_doc: com.tipo, categoria_egreso: com.egreso,
+    proveedor: com.nombre, rut: com.rutCuerpo ? formatearRut(com.rutCuerpo) : "", giro: com.giro, categoria: com.categoria,
+    folio: com.tipo === "otro" ? "" : String(1000 + Math.floor(r() * 899000)), fecha: ymd(addDays(new Date(), -Math.floor(r() * 3))),
+    // Boleta / comprobante: el total ya trae el IVA y no da crédito fiscal → se registra el total, sin desglose
+    neto: total, iva: 0, total, condicion_pago: "Contado",
+    lineas, confianza: Math.round((0.84 + r() * 0.13) * 100) / 100, motor: "simulado-v1", archivo,
+  };
+}
+
+export function extraerFactura(entrada: { archivo?: string; bytes?: number; semilla?: number; ejemplo?: boolean; tipo?: TipoDoc }): FacturaExtraida {
   // Simulación determinista: el "resultado del OCR" depende del nombre/tamaño del archivo.
-  const semilla = (entrada.semilla ?? 0) + hash(entrada.archivo ?? "ejemplo") + (entrada.bytes ?? 0);
+  const semilla = (entrada.semilla ?? 0) + hash(entrada.archivo ?? "ejemplo" + (entrada.tipo ?? "")) + (entrada.bytes ?? 0);
   const r = rng(semilla);
+  const tipo = entrada.tipo ?? tipoDesdeArchivo(entrada.archivo, r);
+  if (tipo !== "factura") return extraerGasto(tipo, r, entrada.archivo ?? null);
   const pick = <T,>(a: T[]) => a[Math.floor(r() * a.length)];
   const prov = PROVEEDORES[Math.floor(r() * PROVEEDORES.length)];
   const nLineas = 2 + Math.floor(r() * Math.min(4, prov.productos.length - 1));
@@ -126,6 +197,7 @@ export function extraerFactura(entrada: { archivo?: string; bytes?: number; semi
   const neto = lineas.reduce((a, l) => a + l.total, 0);
   const iva = Math.round(neto * IVA);
   return {
+    tipo_doc: "factura", categoria_egreso: "insumos",
     proveedor: prov.nombre, rut: formatearRut(prov.rutCuerpo), giro: prov.giro, categoria: CATEGORIAS[prov.nombre] ?? "Insumos",
     folio: String(100000 + Math.floor(r() * 899999)), fecha, neto, iva, total: neto + iva,
     condicion_pago: r() < 0.6 ? "30 días" : "Contado",
@@ -136,6 +208,7 @@ export function extraerFactura(entrada: { archivo?: string; bytes?: number; semi
 
 // ---------------- Guardado + automatización de productos ----------------
 interface DatosFactura {
+  tipo_doc?: TipoDoc; categoria_egreso?: CategoriaEgreso; descripcion?: string | null;
   proveedor: string; rut: string; folio: string; fecha: string; categoria?: string; neto: number; iva?: number; total?: number;
   estado?: "pagada" | "por_pagar"; condicion_pago?: string; archivo?: string | null; nota?: string | null; confianza?: number | null;
   lineas: { producto: string; cantidad: number; unidad: string; precio_unitario: number; total?: number }[];
@@ -144,17 +217,28 @@ interface DatosFactura {
 export interface AlertaAlza { producto: string; unidad: string; anterior: number; nuevo: number; variacion_pct: number; proveedor: string }
 
 function registrarFactura(db: Database, tenantId: number, d: DatosFactura, creadoEn?: string, conEgreso = true) {
+  const tipo = tipoDoc(d.tipo_doc);
+  const egresoCat = tipo === "factura" && !d.categoria_egreso ? "insumos" : catEgreso(d.categoria_egreso);
+  d = { ...d, categoria: d.categoria?.trim() || CAT_EGRESO_LABEL[egresoCat] };
   const neto = Math.round(d.neto);
-  const iva = Math.round(d.iva ?? neto * IVA);
-  const total = Math.round(d.total ?? neto + iva);
+  // Factura: neto + IVA 19% (crédito fiscal). Boleta/comprobante: el total ya incluye IVA, sin desglose.
+  const iva = tipo === "factura" ? Math.round(d.iva ?? neto * IVA) : 0;
+  const total = Math.round(tipo === "factura" ? d.total ?? neto + iva : neto);
   const estado = d.estado === "pagada" ? "pagada" : "por_pagar";
-  const dup = db.query("SELECT id FROM facturas_facturas WHERE tenant_id = ? AND rut = ? AND folio = ?").get(tenantId, d.rut, String(d.folio)) as { id: number } | null;
-  if (dup) throw new HttpError(409, `La factura ${d.folio} de ${d.proveedor} ya está registrada`);
+  const folio = String(d.folio ?? "").trim();
+  const rut = String(d.rut ?? "").trim();
+  if (folio) {
+    const dup = db.query(`SELECT id FROM facturas_facturas WHERE tenant_id = ? AND tipo_doc = ? AND folio = ? AND (CASE WHEN ? <> '' THEN rut = ? ELSE proveedor = ? END)`)
+      .get(tenantId, tipo, folio, rut, rut, d.proveedor) as { id: number } | null;
+    if (dup) throw new HttpError(409, `La ${TIPO_DOC_LABEL[tipo].toLowerCase()} ${folio} de ${d.proveedor} ya está registrada`);
+  }
 
-  const f = db.query(`INSERT INTO facturas_facturas (tenant_id, proveedor, rut, folio, fecha, categoria, neto, iva, total, estado, condicion_pago, archivo, nota, confianza, creado_en)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime'))) RETURNING id`)
-    .get(tenantId, d.proveedor, d.rut, String(d.folio), d.fecha, d.categoria ?? "Insumos", neto, iva, total, estado,
-      d.condicion_pago ?? "30 días", d.archivo ?? null, d.nota ?? null, d.confianza ?? null, creadoEn ?? null) as { id: number };
+  const f = db.query(`INSERT INTO facturas_facturas (tenant_id, tipo_doc, categoria_egreso, proveedor, rut, folio, fecha, categoria, neto, iva, total, estado, condicion_pago, archivo, nota, confianza, creado_en)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime'))) RETURNING id`)
+    .get(tenantId, tipo, egresoCat, d.proveedor, rut, folio, d.fecha, d.categoria ?? "Insumos", neto, iva, total, estado,
+      d.condicion_pago ?? (tipo === "factura" ? "30 días" : "Contado"), d.archivo ?? null, d.nota ?? null, d.confianza ?? null, creadoEn ?? null) as { id: number };
+  // Sólo los insumos alimentan el catálogo de productos (una ampolleta o la cuenta de luz no son productos)
+  const alimentaCatalogo = egresoCat === "insumos";
 
   const insL = db.query("INSERT INTO facturas_lineas (tenant_id, factura_id, producto, cantidad, unidad, precio_unitario, total) VALUES (?, ?, ?, ?, ?, ?, ?)");
   const insP = db.query(`INSERT INTO facturas_productos (tenant_id, clave, nombre, unidad, categoria, proveedor, ultimo_costo, costo_anterior, variacion_pct, ultima_compra, compras)
@@ -169,6 +253,7 @@ function registrarFactura(db: Database, tenantId: number, d: DatosFactura, cread
     const cantidad = Number(l.cantidad) || 0;
     const precio = Math.round(Number(l.precio_unitario) || 0);
     insL.run(tenantId, f.id, nombre, cantidad, unidad, precio, Math.round(l.total ?? precio * cantidad));
+    if (!alimentaCatalogo) continue;
 
     const k = clave(nombre, unidad);
     let prod = db.query("SELECT * FROM facturas_productos WHERE tenant_id = ? AND clave = ?").get(tenantId, k) as any;
@@ -193,10 +278,10 @@ function registrarFactura(db: Database, tenantId: number, d: DatosFactura, cread
 
   // El egreso se escribe en la isla contabilidad sólo al confirmar una factura real (el seed no toca datos vecinos)
   const egreso = conEgreso
-    ? registrarEgreso(db, tenantId, { id: f.id, proveedor: d.proveedor, fecha: d.fecha, total, neto, iva, categoria: d.categoria ?? "Insumos", folio: String(d.folio), estado })
+    ? registrarEgreso(db, tenantId, { id: f.id, tipo, egresoCat, proveedor: d.proveedor, fecha: d.fecha, total, neto, iva, categoria: d.categoria ?? "Insumos", folio, estado })
     : { ok: false as const, motivo: "no corresponde (datos de prueba)", id: null };
   if (egreso.ok) db.query("UPDATE facturas_facturas SET egreso_id = ? WHERE id = ?").run(egreso.id ?? null, f.id);
-  return { id: f.id, folio: String(d.folio), neto, iva, total, estado, alzas, egreso };
+  return { id: f.id, tipo_doc: tipo, tipo_label: TIPO_DOC_LABEL[tipo], categoria_egreso: egresoCat, folio, neto, iva, total, estado, alzas, egreso };
 }
 
 // ---------------- Integración tolerante con la isla contabilidad ----------------
@@ -211,18 +296,19 @@ function valoresPermitidos(sql: string, columna: string): string[] | null {
   return vals.length ? vals : null;
 }
 
-function registrarEgreso(db: Database, tenantId: number, f: { id: number; proveedor: string; fecha: string; total: number; neto: number; iva: number; categoria: string; folio: string; estado: string }) {
+function registrarEgreso(db: Database, tenantId: number, f: { id: number; tipo: TipoDoc; egresoCat: CategoriaEgreso; proveedor: string; fecha: string; total: number; neto: number; iva: number; categoria: string; folio: string; estado: string }) {
   try {
     const cols = db.query("PRAGMA table_info('contabilidad_egresos')").all() as { name: string; notnull: number; dflt_value: unknown; pk: number }[];
     if (!cols.length) return { ok: false as const, motivo: "contabilidad aún no tiene la tabla de egresos", id: null };
     const have = new Set(cols.map((c) => c.name));
     const sql = String((db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'contabilidad_egresos'").get() as { sql: string } | null)?.sql ?? "");
-    const detalle = `Factura ${f.folio} · ${f.proveedor} (${f.categoria})`;
+    const doc = `${TIPO_DOC_LABEL[f.tipo]}${f.folio ? ` ${f.folio}` : ""}`;
+    const detalle = `${doc} · ${f.proveedor} (${f.categoria})`;
     // Nombres de columna posibles según cómo la haya definido la otra isla
     const candidatos: Record<string, unknown> = {
       tenant_id: tenantId, fecha: f.fecha, monto: f.total, total: f.total, neto: f.neto, iva: f.iva,
-      categoria: "insumos", tipo: "insumos", glosa: detalle, detalle, descripcion: detalle, concepto: detalle, nota: detalle,
-      proveedor: f.proveedor, documento: `Factura ${f.folio}`, folio: f.folio, con_documento: 1,
+      categoria: f.egresoCat, tipo: f.egresoCat, glosa: detalle, detalle, descripcion: detalle, concepto: detalle, nota: detalle,
+      proveedor: f.proveedor, documento: doc, folio: f.folio, con_documento: 1,
       medio: "transferencia", medio_pago: "transferencia", metodo_pago: "transferencia",
       estado: f.estado === "pagada" ? "pagado" : "pendiente", origen: "facturas", modulo: "facturas", fuente: "facturas",
     };
@@ -232,7 +318,7 @@ function registrarEgreso(db: Database, tenantId: number, f: { id: number; provee
       if (!permitidos) continue;
       const valor = String(candidatos[k]);
       if (!permitidos.includes(valor)) {
-        const preferido = ["insumos", "insumo", "proveedores", "compras", "otros", "otro"].find((v) => permitidos.includes(v));
+        const preferido = [f.egresoCat, "insumos", "insumo", "proveedores", "compras", "otros", "otro"].find((v) => permitidos.includes(v));
         candidatos[k] = preferido ?? permitidos[0];
       }
     }
@@ -298,6 +384,29 @@ function seed(db: Database, tenant: Tenant) {
         } catch { /* folio repetido: se ignora */ }
       }
     }
+    // Boletas y comprobantes de gastos menores (aseo, ferretería, gas, luz, fletes)
+    for (const com of COMERCIOS) {
+      const cada = com.categoria === "Luz" ? 30 : com.categoria === "Gas" ? 14 : 8 + Math.floor(r() * 12);
+      for (let off = -58 + Math.floor(r() * cada); off <= 0; off += cada) {
+        if (com.categoria !== "Luz" && com.categoria !== "Gas" && r() < 0.35) continue;
+        const fecha = ymd(addDays(new Date(), off));
+        const n = Math.min(com.items.length, 1 + Math.floor(r() * 3));
+        const lineas = [...com.items].sort(() => r() - 0.5).slice(0, n).map((p) => {
+          const precio = redondear(p.precio * (1 + (r() - 0.5) * 0.1));
+          const cantidad = pick(p.cant);
+          return { producto: p.nombre, unidad: p.unidad, cantidad, precio_unitario: precio, total: Math.round(precio * cantidad) };
+        });
+        const total = lineas.reduce((a, l) => a + l.total, 0);
+        try {
+          registrarFactura(db, tid, {
+            tipo_doc: com.tipo, categoria_egreso: com.egreso, proveedor: com.nombre, rut: com.rutCuerpo ? formatearRut(com.rutCuerpo) : "",
+            folio: com.tipo === "otro" ? "" : String(10000 + Math.floor(r() * 890000)), fecha, categoria: com.categoria, neto: total, lineas,
+            estado: com.categoria === "Luz" && off > -10 ? "por_pagar" : "pagada", condicion_pago: "Contado",
+            archivo: r() < 0.8 ? `boleta-${fecha}.jpg` : null, confianza: Math.round((0.82 + r() * 0.15) * 100) / 100,
+          }, `${fecha} ${pad(9 + Math.floor(r() * 9))}:${pad(Math.floor(r() * 60))}:00`, false);
+        } catch { /* repetida */ }
+      }
+    }
   });
   tx();
 }
@@ -309,6 +418,8 @@ const mod: ServerModule = {
     db.exec(`
       CREATE TABLE IF NOT EXISTS facturas_facturas (
         id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL,
+        tipo_doc TEXT NOT NULL DEFAULT 'factura',        -- factura | boleta | otro
+        categoria_egreso TEXT NOT NULL DEFAULT 'insumos', -- categoría del egreso en contabilidad
         proveedor TEXT NOT NULL, rut TEXT NOT NULL, folio TEXT NOT NULL, fecha TEXT NOT NULL,
         categoria TEXT NOT NULL DEFAULT 'Insumos',
         neto INTEGER NOT NULL, iva INTEGER NOT NULL, total INTEGER NOT NULL,
@@ -340,29 +451,36 @@ const mod: ServerModule = {
       );
       CREATE INDEX IF NOT EXISTS facturas_precios_p ON facturas_precios(producto_id, fecha);
     `);
+    // Bases creadas antes de aceptar boletas: agregar columnas nuevas
+    const cols = new Set((db.query("PRAGMA table_info('facturas_facturas')").all() as { name: string }[]).map((c) => c.name));
+    if (!cols.has("tipo_doc")) db.exec("ALTER TABLE facturas_facturas ADD COLUMN tipo_doc TEXT NOT NULL DEFAULT 'factura'");
+    if (!cols.has("categoria_egreso")) db.exec("ALTER TABLE facturas_facturas ADD COLUMN categoria_egreso TEXT NOT NULL DEFAULT 'insumos'");
   },
   seed,
   routes: [
     {
       // "Escanear": acepta multipart (foto/PDF) o JSON {ejemplo:true}. No guarda nada: devuelve lo leído para revisar.
       method: "POST", path: "/escanear", handler: async (ctx) => {
-        let archivo: string | null = null, bytes = 0;
+        let archivo: string | null = null, bytes = 0, tipo: TipoDoc | undefined;
         const ct = ctx.req.headers.get("content-type") ?? "";
         if (ct.includes("multipart/form-data")) {
           const form = await ctx.req.formData();
           const f = form.get("archivo");
           if (f && typeof f !== "string") { archivo = f.name; bytes = f.size; }
+          const t = form.get("tipo"); if (TIPOS_DOC.includes(t as TipoDoc)) tipo = t as TipoDoc;
         } else {
           const b = await ctx.req.json().catch(() => ({} as any));
           if (b?.archivo) { archivo = String(b.archivo); bytes = Number(b.bytes) || 0; }
+          if (TIPOS_DOC.includes(b?.tipo)) tipo = b.tipo;
         }
-        const datos = extraerFactura({ archivo: archivo ?? undefined, bytes, semilla: ctx.tenant.id * 31 });
+        const datos = extraerFactura({ archivo: archivo ?? undefined, bytes, semilla: ctx.tenant.id * 31 + (archivo ? 0 : Date.now() % 997), tipo });
         // Comparación contra el último costo conocido, para avisar antes de confirmar
         const lineas = datos.lineas.map((l) => {
           const p = ctx.db.query("SELECT ultimo_costo, ultima_compra FROM facturas_productos WHERE tenant_id = ? AND clave = ?")
             .get(ctx.tenant.id, clave(l.producto, l.unidad)) as { ultimo_costo: number; ultima_compra: string } | null;
           const variacion = p && p.ultimo_costo > 0 ? Math.round(((l.precio_unitario - p.ultimo_costo) / p.ultimo_costo) * 1000) / 10 : null;
-          return { ...l, costo_anterior: p?.ultimo_costo ?? null, variacion_pct: variacion, alza: variacion !== null && variacion > ALZA_PCT, nuevo: !p };
+          const catalogo = datos.categoria_egreso === "insumos";
+          return { ...l, costo_anterior: p?.ultimo_costo ?? null, variacion_pct: variacion, alza: catalogo && variacion !== null && variacion > ALZA_PCT, nuevo: catalogo && !p };
         });
         return { ...datos, lineas, alza_pct: ALZA_PCT, ejemplo: !archivo };
       },
@@ -371,18 +489,28 @@ const mod: ServerModule = {
       // Confirmar: guarda la factura, actualiza productos/historial y registra el egreso.
       method: "POST", path: "/facturas", handler: async (ctx) => {
         const b = await ctx.body<DatosFactura>();
-        if (!b?.proveedor || !b?.folio || !b?.fecha) throw new HttpError(400, "Faltan proveedor, folio o fecha");
-        if (!Array.isArray(b.lineas) || !b.lineas.length) throw new HttpError(400, "La factura no tiene líneas");
-        const neto = Math.round(Number(b.neto) || b.lineas.reduce((a, l) => a + (Number(l.total) || (Number(l.precio_unitario) || 0) * (Number(l.cantidad) || 0)), 0));
-        if (neto <= 0) throw new HttpError(400, "El neto debe ser mayor a cero");
-        return registrarFactura(ctx.db, ctx.tenant.id, { ...b, neto, rut: String(b.rut ?? "") });
+        const tipo = tipoDoc(b?.tipo_doc);
+        if (!b?.proveedor?.trim() || !b?.fecha) throw new HttpError(400, "Faltan el comercio o proveedor y la fecha");
+        if (tipo === "factura" && !String(b.folio ?? "").trim()) throw new HttpError(400, "La factura necesita folio");
+        let lineas = Array.isArray(b.lineas) ? b.lineas.filter((l) => String(l?.producto ?? "").trim()) : [];
+        if (tipo === "factura" && !lineas.length) throw new HttpError(400, "La factura no tiene líneas");
+        const sumaLineas = lineas.reduce((a, l) => a + (Number(l.total) || (Number(l.precio_unitario) || 0) * (Number(l.cantidad) || 0)), 0);
+        // Boleta o comprobante sin detalle: basta el total y una descripción
+        const base = tipo === "factura" ? Number(b.neto) || sumaLineas : Number(b.total) || Number(b.neto) || sumaLineas;
+        const neto = Math.round(base);
+        if (neto <= 0) throw new HttpError(400, tipo === "factura" ? "El neto debe ser mayor a cero" : "El total debe ser mayor a cero");
+        if (!lineas.length) lineas = [{ producto: String(b.descripcion ?? "").trim() || `Gasto ${b.proveedor}`, cantidad: 1, unidad: "unidad", precio_unitario: neto, total: neto }];
+        return registrarFactura(ctx.db, ctx.tenant.id, { ...b, tipo_doc: tipo, lineas, neto, total: tipo === "factura" ? b.total : neto, rut: String(b.rut ?? "") });
       },
     },
     {
       method: "GET", path: "/facturas", handler: ({ db, tenant, url }) => {
         const estado = url.searchParams.get("estado");
-        const where = estado === "pagada" || estado === "por_pagar" ? " AND estado = ?" : "";
-        const args: any[] = [tenant.id, ...(where ? [estado] : [])];
+        const tipo = url.searchParams.get("tipo");
+        let where = "";
+        const args: any[] = [tenant.id];
+        if (estado === "pagada" || estado === "por_pagar") { where += " AND estado = ?"; args.push(estado); }
+        if (TIPOS_DOC.includes(tipo as TipoDoc)) { where += " AND tipo_doc = ?"; args.push(tipo); }
         return db.query(`SELECT * FROM facturas_facturas WHERE tenant_id = ?${where} ORDER BY fecha DESC, id DESC LIMIT 200`).all(...args);
       },
     },
@@ -433,10 +561,12 @@ const mod: ServerModule = {
         const mes = db.query("SELECT COUNT(*) AS n, COALESCE(SUM(total),0) AS monto, COALESCE(SUM(iva),0) AS iva FROM facturas_facturas WHERE tenant_id = ? AND strftime('%Y-%m', fecha) = strftime('%Y-%m','now','localtime')").get(tid) as any;
         const alzas = db.query("SELECT COUNT(*) AS n FROM facturas_productos WHERE tenant_id = ? AND variacion_pct > ?").get(tid, ALZA_PCT) as any;
         const productos = db.query("SELECT COUNT(*) AS n FROM facturas_productos WHERE tenant_id = ?").get(tid) as any;
+        const porTipo = db.query(`SELECT tipo_doc, COUNT(*) AS n, COALESCE(SUM(total),0) AS monto FROM facturas_facturas
+          WHERE tenant_id = ? AND strftime('%Y-%m', fecha) = strftime('%Y-%m','now','localtime') GROUP BY tipo_doc`).all(tid) as { tipo_doc: TipoDoc; n: number; monto: number }[];
         const proveedores = db.query(`SELECT proveedor, COUNT(*) AS facturas, COALESCE(SUM(total),0) AS total FROM facturas_facturas
           WHERE tenant_id = ? AND fecha >= date('now','localtime','-90 days') GROUP BY proveedor ORDER BY total DESC`).all(tid);
         const contabilidad = (() => { try { return !!(db.query("PRAGMA table_info('contabilidad_egresos')").all() as any[]).length; } catch { return false; } })();
-        return { por_pagar: porPagar, mes, alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
+        return { por_pagar: porPagar, mes, por_tipo: Object.fromEntries(TIPOS_DOC.map((t) => [t, porTipo.find((x) => x.tipo_doc === t) ?? { n: 0, monto: 0 }])), alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
       },
     },
   ],

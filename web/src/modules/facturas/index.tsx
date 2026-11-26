@@ -2,19 +2,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api, ClientModule, ModuleProps } from "../../core/types";
 import { clp } from "../../core/api";
 
-// Isla "facturas": escaneo (OCR simulado) de facturas de proveedores, revisión, confirmación,
-// y catálogo de productos con último costo, historial e alertas de alza.
+// Isla "facturas": escaneo (OCR simulado) de facturas, boletas y otros comprobantes de gasto, revisión,
+// confirmación como egreso, y catálogo de productos con último costo, historial e alertas de alza.
+
+type TipoDoc = "factura" | "boleta" | "otro";
+const TIPO_LABEL: Record<TipoDoc, string> = { factura: "Factura", boleta: "Boleta", otro: "Comprobante" };
+const TIPO_ICONO: Record<TipoDoc, string> = { factura: "🧾", boleta: "🧾", otro: "📝" };
+// Mismas categorías de egreso que la isla contabilidad
+const CAT_EGRESO = [["insumos", "Insumos"], ["servicios", "Servicios básicos"], ["mantencion", "Mantención y aseo"], ["arriendo", "Arriendo"], ["sueldos", "Sueldos"], ["otros", "Otros"]] as const;
+const catLabel = (c: string) => CAT_EGRESO.find(([v]) => v === c)?.[1] ?? c;
 
 interface LineaRev { producto: string; cantidad: number; unidad: string; precio_unitario: number; total: number; costo_anterior: number | null; variacion_pct: number | null; alza: boolean; nuevo: boolean }
 interface Extraida {
+  tipo_doc: TipoDoc; categoria_egreso: string; descripcion?: string;
   proveedor: string; rut: string; giro: string; folio: string; fecha: string; categoria: string;
   neto: number; iva: number; total: number; condicion_pago: string; lineas: LineaRev[];
   confianza: number; motor: string; archivo: string | null; ejemplo: boolean; alza_pct: number;
 }
-interface Factura { id: number; proveedor: string; rut: string; folio: string; fecha: string; categoria: string; neto: number; iva: number; total: number; estado: "pagada" | "por_pagar"; condicion_pago: string | null; archivo: string | null; egreso_id: number | null }
+interface Factura { id: number; tipo_doc: TipoDoc; categoria_egreso: string; proveedor: string; rut: string; folio: string; fecha: string; categoria: string; neto: number; iva: number; total: number; estado: "pagada" | "por_pagar"; condicion_pago: string | null; archivo: string | null; egreso_id: number | null }
 interface Producto { id: number; nombre: string; unidad: string; categoria: string | null; proveedor: string | null; ultimo_costo: number; costo_anterior: number | null; variacion_pct: number; ultima_compra: string | null; compras: number }
 interface Resumen {
-  por_pagar: { n: number; monto: number }; mes: { n: number; monto: number; iva: number }; alzas: number; productos: number;
+  por_pagar: { n: number; monto: number }; mes: { n: number; monto: number; iva: number }; por_tipo?: Record<TipoDoc, { n: number; monto: number }>; alzas: number; productos: number;
   proveedores: { proveedor: string; facturas: number; total: number }[]; alza_pct: number; contabilidad_conectada: boolean;
 }
 
@@ -30,8 +38,9 @@ function Pantalla({ api }: ModuleProps) {
   return (
     <div className="stack">
       <div className="grid">
-        <div className="card"><p className="muted">Facturas por pagar</p><p className="kpi">{clp(resumen?.por_pagar.monto ?? 0)}</p><p className="muted">{resumen?.por_pagar.n ?? 0} documentos</p></div>
-        <div className="card"><p className="muted">Compras del mes</p><p className="kpi">{clp(resumen?.mes.monto ?? 0)}</p><p className="muted">IVA {clp(resumen?.mes.iva ?? 0)} · {resumen?.mes.n ?? 0} facturas</p></div>
+        <div className="card"><p className="muted">Gastos por pagar</p><p className="kpi">{clp(resumen?.por_pagar.monto ?? 0)}</p><p className="muted">{resumen?.por_pagar.n ?? 0} documentos</p></div>
+        <div className="card"><p className="muted">Gastos del mes</p><p className="kpi">{clp(resumen?.mes.monto ?? 0)}</p>
+          <p className="muted">{resumen?.por_tipo?.factura.n ?? 0} facturas · {resumen?.por_tipo?.boleta.n ?? 0} boletas · {resumen?.por_tipo?.otro.n ?? 0} otros · IVA crédito {clp(resumen?.mes.iva ?? 0)}</p></div>
         <div className="card" style={resumen?.alzas ? { background: "var(--naranjoClaro)", borderColor: "var(--naranjo)" } : undefined}>
           <p className="muted">Productos que subieron</p><p className="kpi">{resumen?.alzas ?? 0}</p><p className="muted">más de {resumen?.alza_pct ?? 8}% desde la compra anterior</p></div>
         <div className="card"><p className="muted">Productos en el catálogo</p><p className="kpi">{resumen?.productos ?? 0}</p>
@@ -39,8 +48,8 @@ function Pantalla({ api }: ModuleProps) {
       </div>
 
       <div className="row">
-        <button className={vista === "escanear" ? "btn alt" : "btn ghost"} onClick={() => setVista("escanear")}>Escanear factura</button>
-        <button className={vista === "facturas" ? "btn alt" : "btn ghost"} onClick={() => setVista("facturas")}>Facturas</button>
+        <button className={vista === "escanear" ? "btn alt" : "btn ghost"} onClick={() => setVista("escanear")}>Escanear documento</button>
+        <button className={vista === "facturas" ? "btn alt" : "btn ghost"} onClick={() => setVista("facturas")}>Documentos</button>
         <button className={vista === "productos" ? "btn alt" : "btn ghost"} onClick={() => setVista("productos")}>Productos y precios</button>
       </div>
 
@@ -70,21 +79,23 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
   const [cargando, setCargando] = useState(false);
   const [err, setErr] = useState("");
   const [resultado, setResultado] = useState<any>(null);
+  const [tipoSubida, setTipoSubida] = useState<"auto" | TipoDoc>("auto");
   const file = useRef<HTMLInputElement>(null);
 
-  const escanear = async (archivo?: File) => {
+  const escanear = async (archivo?: File, tipo?: TipoDoc) => {
     setCargando(true); setErr(""); setResultado(null);
     try {
       let r: Extraida;
       if (archivo) {
         const fd = new FormData();
         fd.append("archivo", archivo);
+        if (tipoSubida !== "auto") fd.append("tipo", tipoSubida);
         const res = await fetch("/api/m/facturas/escanear", { method: "POST", headers: { "x-tenant": tenantSlug() }, body: fd });
         const j = await res.json();
         if (!res.ok) throw new Error(j.error ?? "No se pudo leer el archivo");
         r = j;
       } else {
-        r = await api.post<Extraida>("/escanear", {});
+        r = await api.post<Extraida>("/escanear", { tipo: tipo ?? "factura" });
       }
       setDatos(r);
     } catch (e: any) { setErr(e.message); } finally { setCargando(false); }
@@ -95,6 +106,7 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
     setCargando(true); setErr("");
     try {
       const r = await api.post("/facturas", {
+        tipo_doc: datos.tipo_doc, categoria_egreso: datos.categoria_egreso, descripcion: datos.descripcion,
         proveedor: datos.proveedor, rut: datos.rut, folio: datos.folio, fecha: datos.fecha, categoria: datos.categoria,
         neto: datos.neto, iva: datos.iva, total: datos.total, condicion_pago: datos.condicion_pago, archivo: datos.archivo,
         confianza: datos.confianza, estado,
@@ -107,17 +119,18 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
   const editarLinea = (i: number, campo: "cantidad" | "precio_unitario", valor: number) => {
     if (!datos) return;
     const lineas = datos.lineas.map((l, k) => (k === i ? { ...l, [campo]: valor, total: Math.round((campo === "cantidad" ? valor : l.cantidad) * (campo === "precio_unitario" ? valor : l.precio_unitario)) } : l));
-    const neto = lineas.reduce((a, l) => a + l.total, 0);
-    const iva = Math.round(neto * 0.19);
-    setDatos({ ...datos, lineas, neto, iva, total: neto + iva });
+    setDatos(recalcular({ ...datos, lineas }));
   };
+  const cambiarTipo = (t: TipoDoc) => datos && setDatos(recalcular({ ...datos, tipo_doc: t,
+    categoria_egreso: t === "factura" && datos.tipo_doc !== "factura" ? "insumos" : datos.categoria_egreso }));
+  const esFactura = datos?.tipo_doc === "factura";
 
   return (
     <div className="stack">
       {resultado && (
         <div className="card" style={{ background: "var(--verdeClaro)", borderColor: "var(--verde)" }}>
-          <b>Factura {resultado.folio} registrada por {clp(resultado.total)}.</b>
-          <p className="muted">{resultado.egreso.ok ? "El egreso quedó anotado en contabilidad." : `Egreso no registrado en contabilidad (${resultado.egreso.motivo}).`}</p>
+          <b>{resultado.tipo_label}{resultado.folio ? ` ${resultado.folio}` : ""} registrada por {clp(resultado.total)}.</b>
+          <p className="muted">{resultado.egreso.ok ? `El egreso quedó anotado en contabilidad como ${catLabel(resultado.categoria_egreso)}.` : `Egreso no registrado en contabilidad (${resultado.egreso.motivo}).`}</p>
           {!!resultado.alzas?.length && (
             <ul style={{ marginTop: 8 }}>
               {resultado.alzas.map((a: any) => <li key={a.producto}>⚠️ {a.producto} subió {pct(a.variacion_pct)}: {clp(a.anterior)} → {clp(a.nuevo)} por {a.unidad}</li>)}
@@ -128,15 +141,23 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
 
       {!datos && (
         <div className="card">
-          <h3>Escanear una factura del proveedor</h3>
-          <p className="muted" style={{ marginTop: 4 }}>Saca una foto a la factura o sube el PDF que te mandaron. Nosotros leemos los datos y armamos el detalle.</p>
+          <h3>Escanear un gasto</h3>
+          <p className="muted" style={{ marginTop: 4 }}>Sirve para facturas de proveedores, boletas (ferretería, supermercado, gas, luz) y otros comprobantes como recibos o vales. Saca una foto o sube el PDF: leemos los datos y lo dejamos listo como egreso.</p>
           <input ref={file} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void escanear(f); e.target.value = ""; }} />
+          <div className="row" style={{ marginTop: 12 }}>
+            <span className="muted">¿Qué vas a subir?</span>
+            {([["auto", "Detectar solo"], ["factura", "Factura"], ["boleta", "Boleta"], ["otro", "Otro comprobante"]] as const).map(([v, l]) => (
+              <button key={v} className={tipoSubida === v ? "btn alt" : "btn ghost"} style={{ padding: "6px 10px" }} onClick={() => setTipoSubida(v)}>{l}</button>
+            ))}
+          </div>
           <div className="row" style={{ marginTop: 14 }}>
             <button className="btn alt" disabled={cargando} onClick={() => file.current?.click()}>📷 Subir foto o PDF</button>
-            <button className="btn ghost" disabled={cargando} onClick={() => escanear()}>Usar factura de ejemplo</button>
+            <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "factura")}>Factura de ejemplo</button>
+            <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "boleta")}>Boleta de ejemplo</button>
+            <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "otro")}>Comprobante de ejemplo</button>
           </div>
-          {cargando && <p className="muted" style={{ marginTop: 10 }}>Leyendo la factura…</p>}
+          {cargando && <p className="muted" style={{ marginTop: 10 }}>Leyendo el documento…</p>}
           {err && <p style={{ color: "var(--rojo)", marginTop: 10 }}>{err}</p>}
           <p className="muted" style={{ marginTop: 12 }}>Prototipo: la lectura es simulada (función <code>extraerFactura()</code> en el servidor). Después se reemplaza por el OCR real sin cambiar esta pantalla.</p>
         </div>
@@ -148,15 +169,25 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
             <h3>Revisa lo que leímos</h3>
             <span className="chip">{Math.round(datos.confianza * 100)}% de confianza</span>
           </div>
-          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : "Factura de ejemplo"} · motor {datos.motor}</p>
+          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : `${TIPO_LABEL[datos.tipo_doc]} de ejemplo`} · motor {datos.motor}</p>
+
+          <div className="row" style={{ marginTop: 12 }}>
+            {(["factura", "boleta", "otro"] as const).map((t) => (
+              <button key={t} className={datos.tipo_doc === t ? "btn alt" : "btn ghost"} style={{ padding: "6px 10px" }} onClick={() => cambiarTipo(t)}>{TIPO_ICONO[t]} {t === "otro" ? "Otro comprobante" : TIPO_LABEL[t]}</button>
+            ))}
+          </div>
 
           <div className="grid" style={{ marginTop: 12 }}>
-            <label className="stack" style={{ gap: 4 }}><span className="muted">Proveedor</span>
+            <label className="stack" style={{ gap: 4 }}><span className="muted">{esFactura ? "Proveedor" : "Comercio o persona"}</span>
               <input className="input" value={datos.proveedor} onChange={(e) => setDatos({ ...datos, proveedor: e.target.value })} /></label>
-            <label className="stack" style={{ gap: 4 }}><span className="muted">RUT</span>
+            <label className="stack" style={{ gap: 4 }}><span className="muted">RUT{esFactura ? "" : " (opcional)"}</span>
               <input className="input" value={datos.rut} onChange={(e) => setDatos({ ...datos, rut: e.target.value })} /></label>
-            <label className="stack" style={{ gap: 4 }}><span className="muted">Folio</span>
+            <label className="stack" style={{ gap: 4 }}><span className="muted">{esFactura ? "Folio" : "N° de boleta o comprobante (opcional)"}</span>
               <input className="input" value={datos.folio} onChange={(e) => setDatos({ ...datos, folio: e.target.value })} /></label>
+            <label className="stack" style={{ gap: 4 }}><span className="muted">Tipo de gasto (egreso)</span>
+              <select className="input" value={datos.categoria_egreso} onChange={(e) => setDatos({ ...datos, categoria_egreso: e.target.value })}>
+                {CAT_EGRESO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select></label>
             <label className="stack" style={{ gap: 4 }}><span className="muted">Fecha</span>
               <input className="input" type="date" value={datos.fecha} onChange={(e) => setDatos({ ...datos, fecha: e.target.value })} /></label>
             <label className="stack" style={{ gap: 4 }}><span className="muted">Condición de pago</span>
@@ -178,7 +209,8 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
                     <td><input className="input" style={{ width: 110 }} type="number" value={l.precio_unitario} onChange={(e) => editarLinea(i, "precio_unitario", Number(e.target.value))} /></td>
                     <td>{clp(l.total)}</td>
                     <td>
-                      {l.nuevo ? <span className="chip off">producto nuevo</span>
+                      {datos.categoria_egreso !== "insumos" ? <span className="muted">no es insumo</span>
+                        : l.nuevo ? <span className="chip off">producto nuevo</span>
                         : l.variacion_pct === null ? <span className="muted">—</span>
                           : <span className={l.alza ? "chip bad" : l.variacion_pct < 0 ? "chip" : "chip off"}>{pct(l.variacion_pct)} · antes {clp(l.costo_anterior ?? 0)}</span>}
                     </td>
@@ -190,8 +222,11 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
 
           <div className="row between" style={{ marginTop: 14 }}>
             <div>
-              <p className="muted">Neto {clp(datos.neto)} · IVA 19% {clp(datos.iva)}</p>
+              {esFactura
+                ? <p className="muted">Neto {clp(datos.neto)} · IVA 19% {clp(datos.iva)}</p>
+                : <p className="muted">Total con IVA incluido (sin crédito fiscal)</p>}
               <p className="kpi">{clp(datos.total)}</p>
+              <p className="muted">Se anota como egreso: {catLabel(datos.categoria_egreso)}</p>
             </div>
             <div className="row">
               <button className="btn ghost" onClick={() => setDatos(null)}>Descartar</button>
@@ -208,19 +243,28 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
   );
 }
 
+// Factura: neto + IVA 19%. Boleta o comprobante: la suma de líneas ya es el total (IVA incluido).
+function recalcular(d: Extraida): Extraida {
+  const suma = d.lineas.reduce((a, l) => a + l.total, 0);
+  if (d.tipo_doc === "factura") { const iva = Math.round(suma * 0.19); return { ...d, neto: suma, iva, total: suma + iva }; }
+  return { ...d, neto: suma, iva: 0, total: suma };
+}
+
 // El slug del cliente activo viene en la URL /c/:slug/...
 const tenantSlug = () => location.pathname.split("/")[2] ?? "";
 
 // ---------------- Lista de facturas ----------------
 function Facturas({ api, onCambio }: { api: Api; onCambio: () => void }) {
   const [filtro, setFiltro] = useState<"" | "por_pagar" | "pagada">("");
+  const [tipo, setTipo] = useState<"" | TipoDoc>("");
   const [lista, setLista] = useState<Factura[]>([]);
   const [abierta, setAbierta] = useState<any>(null);
   const [err, setErr] = useState("");
 
   const cargar = useCallback(() => {
-    api.get<Factura[]>(`/facturas${filtro ? `?estado=${filtro}` : ""}`).then(setLista).catch((e) => setErr(e.message));
-  }, [api, filtro]);
+    const q = new URLSearchParams({ ...(filtro ? { estado: filtro } : {}), ...(tipo ? { tipo } : {}) }).toString();
+    api.get<Factura[]>(`/facturas${q ? `?${q}` : ""}`).then(setLista).catch((e) => setErr(e.message));
+  }, [api, filtro, tipo]);
   useEffect(() => { cargar(); }, [cargar]);
 
   const marcar = async (f: Factura, estado: "pagada" | "por_pagar") => {
@@ -234,24 +278,29 @@ function Facturas({ api, onCambio }: { api: Api; onCambio: () => void }) {
   return (
     <div className="card">
       <div className="between">
-        <h3>Facturas de proveedores</h3>
+        <h3>Documentos de gasto</h3>
         <div className="row">
           {([["", "Todas"], ["por_pagar", "Por pagar"], ["pagada", "Pagadas"]] as const).map(([v, l]) => (
             <button key={v} className={filtro === v ? "btn alt" : "btn ghost"} onClick={() => setFiltro(v)}>{l}</button>
           ))}
         </div>
       </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        {([["", "Todos los tipos"], ["factura", "Facturas"], ["boleta", "Boletas"], ["otro", "Otros"]] as const).map(([v, l]) => (
+          <button key={v} className={tipo === v ? "btn alt" : "btn ghost"} style={{ padding: "6px 10px" }} onClick={() => setTipo(v)}>{l}</button>
+        ))}
+      </div>
       {err && <p style={{ color: "var(--rojo)" }}>{err}</p>}
       <div className="scroll-x" style={{ marginTop: 12 }}>
         <table>
-          <thead><tr><th>Fecha</th><th>Proveedor</th><th>Folio</th><th>Total</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Comercio / proveedor</th><th>Documento</th><th>Total</th><th>Estado</th><th></th></tr></thead>
           <tbody>
             {lista.map((f) => (
               <tr key={f.id}>
                 <td>{fechaCl(f.fecha)}</td>
-                <td>{f.proveedor}<div className="muted">{f.rut} · {f.categoria}</div></td>
-                <td>{f.folio}{f.archivo ? <div className="muted">📄 {f.archivo}</div> : null}</td>
-                <td>{clp(f.total)}<div className="muted">neto {clp(f.neto)}</div></td>
+                <td>{f.proveedor}<div className="muted">{f.rut ? `${f.rut} · ` : ""}{f.categoria} · {catLabel(f.categoria_egreso)}</div></td>
+                <td><span className={f.tipo_doc === "factura" ? "chip" : "chip off"}>{TIPO_LABEL[f.tipo_doc] ?? "Factura"}</span> {f.folio || "s/n"}{f.archivo ? <div className="muted">📄 {f.archivo}</div> : null}</td>
+                <td>{clp(f.total)}<div className="muted">{f.tipo_doc === "factura" ? `neto ${clp(f.neto)}` : "IVA incluido"}</div></td>
                 <td><span className={f.estado === "pagada" ? "chip" : "chip warn"}>{f.estado === "pagada" ? "Pagada" : "Por pagar"}</span></td>
                 <td>
                   <div className="row">
@@ -263,13 +312,13 @@ function Facturas({ api, onCambio }: { api: Api; onCambio: () => void }) {
                 </td>
               </tr>
             ))}
-            {!lista.length && <tr><td colSpan={6} className="muted">Sin facturas registradas.</td></tr>}
+            {!lista.length && <tr><td colSpan={6} className="muted">Sin documentos registrados.</td></tr>}
           </tbody>
         </table>
       </div>
       {abierta && (
         <div className="card" style={{ marginTop: 12, background: "var(--fondo)" }}>
-          <b>Factura {abierta.folio} · {abierta.proveedor}</b>
+          <b>{TIPO_LABEL[abierta.tipo_doc as TipoDoc] ?? "Factura"} {abierta.folio || "s/n"} · {abierta.proveedor}</b>
           <p className="muted">{fechaCl(abierta.fecha)} · {abierta.condicion_pago ?? "sin condición"} · {abierta.egreso_id ? `egreso #${abierta.egreso_id} en contabilidad` : "sin egreso en contabilidad"}</p>
           <div className="scroll-x" style={{ marginTop: 8 }}>
             <table>
@@ -315,7 +364,7 @@ function Productos({ api }: { api: Api }) {
             <button className={soloAlzas ? "btn alt" : "btn ghost"} onClick={() => setSoloAlzas((v) => !v)}>Solo alzas</button>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: 4 }}>El catálogo se arma solo con cada factura que confirmas. Avisamos cuando un producto sube más de {alzaPct}%.</p>
+        <p className="muted" style={{ marginTop: 4 }}>El catálogo se arma solo con cada factura o boleta de insumos que confirmas. Avisamos cuando un producto sube más de {alzaPct}%.</p>
         <div className="scroll-x" style={{ marginTop: 12 }}>
           <table>
             <thead><tr><th>Producto</th><th>Último costo</th><th>Variación</th><th>Proveedor</th><th>Última compra</th><th></th></tr></thead>
@@ -374,5 +423,5 @@ function Sparkline({ puntos }: { puntos: number[] }) {
   );
 }
 
-const mod: ClientModule = { id: "facturas", label: "Facturas", icon: "🧾", Component: Pantalla };
+const mod: ClientModule = { id: "facturas", label: "Facturas y boletas", icon: "🧾", Component: Pantalla };
 export default mod;

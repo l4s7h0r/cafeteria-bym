@@ -7,7 +7,7 @@ Propuesta comercial v1 (nov 2026). Precios referenciales en CLP, **+IVA** (19%).
 | Plan (id) | Para quién | Islas | Precio mensual + IVA | Anual (2 meses gratis) |
 |---|---|---|---|---|
 | **Emprende** (`basico`) | Café chico, carro, 1 caja | Contabilidad, Reportes | $14.990 | $149.900 |
-| **Local** (`pro`) | Cafetería con mesas y clientela de fin de semana | Contabilidad, Reportes, Reservas | $29.990 | $299.900 |
+| **Local** (`pro`) | Cafetería con mesas y clientela de fin de semana | Contabilidad, Reportes, Reservas, Plano del local | $29.990 | $299.900 |
 | **Pro** (`full`) | Cafetería con alto flujo y muchos proveedores | Todas (incl. Llamado a mesa y Facturas) | $49.990 | $499.900 |
 | **Cadena** (`cadena`) | 2+ locales | Todas + consolidado multi-local | $99.990 (incluye 2 locales) + $39.990 por local adicional | $999.900 (2 locales) |
 
@@ -33,7 +33,8 @@ Excedente de facturas: $150 + IVA por factura sobre el límite (o subir de plan)
 | Contabilidad | incluida | Base de todos los planes |
 | Reportes | $5.990 | Requiere Contabilidad |
 | Reservas | $14.990 | Incluye sitio público de reservas |
-| Llamado a mesa | $9.990 | Requiere kit QR (ver §4) |
+| Llamado a mesa | $9.990 | Requiere kit QR (ver §4). Incluye menú digital en el QR |
+| Plano del local | $6.990 | Incluido en Local, Pro y Cadena. Sirve más junto a Reservas o Llamado |
 | Facturas y productos | $19.990 | Requiere Contabilidad; incluye 100 facturas/mes |
 
 Regla de precio: armar el plan superior con add-ons siempre sale más caro que subir de plan (ej. Local + Llamado + Facturas = $59.970 vs Pro $49.990).

@@ -4,7 +4,8 @@ import { HttpError } from "../../core/router.ts";
 import { qrSvg } from "./qr.ts";
 
 // Isla "llamado": el comensal escanea el QR de su mesa (/p/:slug/mesa/:mesa) y llama al garzón.
-// Tablas propias: llamado_mesas (lista simple, independiente de la isla reservas), llamado_llamados.
+// Desde el QR también se puede ver el menú del local (carta editable desde la pantalla interna).
+// Tablas propias: llamado_mesas (lista simple, independiente de la isla reservas), llamado_llamados, llamado_menu.
 
 export const TIPOS = ["garzon", "cuenta", "otro"] as const;
 export type TipoLlamado = (typeof TIPOS)[number];
@@ -40,6 +41,29 @@ function conEspera(rows: Llamado[]) {
   }));
 }
 
+// ---------- menú ----------
+interface ItemMenu { id: number; categoria: string; nombre: string; descripcion: string | null; precio: number; disponible: number; orden: number }
+export const MENU_BASE: [string, string, number, string | null][] = [
+  ["Cafés", "Espresso", 1500, "Corto e intenso"], ["Cafés", "Café cortado", 1800, "Espresso con un toque de leche"],
+  ["Cafés", "Café con leche", 2000, null], ["Cafés", "Capuchino", 2400, "Con espuma de leche y canela"],
+  ["Cafés", "Latte vainilla", 2800, null], ["Cafés", "Té o agüita de hierbas", 1200, "Manzanilla, menta o boldo"],
+  ["Completos", "Completo italiano", 2500, "Tomate, palta y mayo"], ["Completos", "Completo dinámico", 2800, "Tomate, palta, chucrut y americana"],
+  ["Sándwiches", "Churrasco italiano", 5500, "En marraqueta o frica"], ["Sándwiches", "Barros Jarpa", 5200, "Jamón y queso fundido"],
+  ["Sándwiches", "Barros Luco", 5600, "Carne y queso fundido"], ["Sándwiches", "Tostado palta", 3200, "Pan de molde integral"],
+  ["Postres", "Kuchen de manzana", 2200, null], ["Postres", "Cheesecake de frambuesa", 3200, null], ["Postres", "Torta mil hojas", 2800, "Manjar y crema"],
+  ["Bebidas", "Bebida en lata", 1500, null], ["Bebidas", "Jugo natural", 2500, "Frutilla, piña o naranja"], ["Bebidas", "Agua mineral", 1300, "Con o sin gas"],
+];
+const menuDe = (db: Database, tid: number, soloDisponibles = false) =>
+  db.query(`SELECT * FROM llamado_menu WHERE tenant_id = ?${soloDisponibles ? " AND disponible = 1" : ""} ORDER BY orden, id`).all(tid) as ItemMenu[];
+function agrupar(items: ItemMenu[]) {
+  const out: { categoria: string; items: ItemMenu[] }[] = [];
+  for (const it of items) {
+    const g = out.find((x) => x.categoria === it.categoria) ?? (out.push({ categoria: it.categoria, items: [] }), out[out.length - 1]);
+    g.items.push(it);
+  }
+  return out;
+}
+
 // ---------- seed ----------
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -65,6 +89,9 @@ function seed(db: Database, tenant: Tenant) {
   const fmt = fmtLocal;
   const factor = 0.7 + r() * 0.8;
   const hoy = new Date();
+
+  const insMenu = db.query("INSERT INTO llamado_menu (tenant_id, categoria, nombre, descripcion, precio, disponible, orden) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  MENU_BASE.forEach(([cat, nombre, precio, desc], i) => insMenu.run(tid, cat, nombre, desc, precio, r() < 0.93 ? 1 : 0, i));
 
   const tx = db.transaction(() => {
     for (let off = -60; off <= 0; off++) {
@@ -123,6 +150,12 @@ const mod: ServerModule = {
         atendido_en TEXT, cerrado_en TEXT
       );
       CREATE INDEX IF NOT EXISTS llamado_llamados_t ON llamado_llamados(tenant_id, estado, creado_en);
+      CREATE TABLE IF NOT EXISTS llamado_menu (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL,
+        categoria TEXT NOT NULL, nombre TEXT NOT NULL, descripcion TEXT,
+        precio INTEGER NOT NULL CHECK (precio >= 0), disponible INTEGER NOT NULL DEFAULT 1, orden INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS llamado_menu_t ON llamado_menu(tenant_id, orden);
     `);
   },
   seed,
@@ -202,7 +235,42 @@ const mod: ServerModule = {
       },
     },
 
+    // ----- menú (interno) -----
+    { method: "GET", path: "/menu", handler: ({ db, tenant }) => menuDe(db, tenant.id) },
+    {
+      method: "POST", path: "/menu", handler: async (ctx) => {
+        const b = await ctx.body();
+        const nombre = String(b?.nombre ?? "").trim().slice(0, 80);
+        const categoria = String(b?.categoria ?? "").trim().slice(0, 40) || "Otros";
+        const precio = Math.round(Number(b?.precio));
+        if (!nombre) throw new HttpError(400, "Falta el nombre del producto");
+        if (!Number.isFinite(precio) || precio < 0) throw new HttpError(400, "Precio inválido");
+        const orden = (ctx.db.query("SELECT COALESCE(MAX(orden), 0) + 1 AS o FROM llamado_menu WHERE tenant_id = ? AND categoria = ?").get(ctx.tenant.id, categoria) as { o: number }).o;
+        return ctx.db.query("INSERT INTO llamado_menu (tenant_id, categoria, nombre, descripcion, precio, orden) VALUES (?, ?, ?, ?, ?, ?) RETURNING *")
+          .get(ctx.tenant.id, categoria, nombre, b?.descripcion ? String(b.descripcion).trim().slice(0, 140) : null, precio, orden);
+      },
+    },
+    {
+      method: "PATCH", path: "/menu/:id", handler: async (ctx) => {
+        const b = await ctx.body();
+        const it = ctx.db.query("SELECT * FROM llamado_menu WHERE id = ? AND tenant_id = ?").get(Number(ctx.params.id), ctx.tenant.id) as ItemMenu | null;
+        if (!it) throw new HttpError(404, "Producto no existe");
+        const precio = b?.precio === undefined ? it.precio : Math.round(Number(b.precio));
+        if (!Number.isFinite(precio) || precio < 0) throw new HttpError(400, "Precio inválido");
+        const disponible = b?.disponible === undefined ? it.disponible : b.disponible ? 1 : 0;
+        const nombre = b?.nombre === undefined ? it.nombre : String(b.nombre).trim().slice(0, 80) || it.nombre;
+        return ctx.db.query("UPDATE llamado_menu SET precio = ?, disponible = ?, nombre = ? WHERE id = ? RETURNING *").get(precio, disponible, nombre, it.id);
+      },
+    },
+    {
+      method: "DELETE", path: "/menu/:id", handler: ({ db, tenant, params }) => {
+        db.query("DELETE FROM llamado_menu WHERE id = ? AND tenant_id = ?").run(Number(params.id), tenant.id);
+        return { ok: true };
+      },
+    },
+
     // ----- público (QR de la mesa) -----
+    { method: "GET", path: "/public/menu", public: true, handler: ({ db, tenant }) => ({ local: tenant.nombre, categorias: agrupar(menuDe(db, tenant.id, true)) }) },
     {
       method: "GET", path: "/public/mesa/:mesa", public: true, handler: ({ db, tenant, params }) => {
         const mesa = mesaPorCodigo(db, tenant.id, params.mesa);
@@ -212,6 +280,7 @@ const mod: ServerModule = {
         return {
           local: tenant.nombre, mesa: { codigo: mesa.codigo, nombre: mesa.nombre, zona: mesa.zona },
           opciones: TIPOS.map((t) => ({ tipo: t, label: TIPO_LABEL[t] })),
+          tiene_menu: !!(db.query("SELECT 1 FROM llamado_menu WHERE tenant_id = ? AND disponible = 1 LIMIT 1").get(tenant.id)),
           activo: abierto ? conEspera([abierto])[0] : null,
         };
       },

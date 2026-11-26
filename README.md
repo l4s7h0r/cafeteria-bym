@@ -20,8 +20,9 @@ Software de gestión para cafeterías, **multi-cliente** y vendido por **planes*
 | **Contabilidad** | Ingresos por medio de pago, gastos por categoría, propinas y reparto por garzón | — |
 | **Reportes** | Resumen diario, semanal y mensual, con comparación contra el periodo anterior | Contabilidad |
 | **Reservas** | Mesas, agenda del día, ocupación y página pública para reservar | — |
-| **Llamado a mesa** | QR por mesa: el comensal llama al garzón o pide la cuenta; cola en vivo | — |
-| **Facturas** | Escaneo de facturas de proveedores, catálogo de productos con costo, alertas de alza y registro automático del gasto | Contabilidad |
+| **Llamado a mesa** | QR por mesa: el comensal ve el menú, llama al garzón o pide la cuenta; cola en vivo y editor del menú | — |
+| **Facturas y boletas** | Escaneo de facturas, boletas (ferretería, gas, luz, aseo…) y otros comprobantes; todo queda como egreso en su categoría. Catálogo de productos con costo y alertas de alza | Contabilidad |
+| **Plano del local** | Editor visual: el dueño dibuja la forma del local y ubica mesas, barra, baños, terraza. El cliente elige mesa al reservar y ve "estás aquí" al escanear el QR. Vista en vivo de mesas libres, reservadas y llamando | — (se conecta con Reservas y Llamado si están) |
 
 Además incluye un **dashboard de administración interna** (`/admin`) para el equipo que vende el software: MRR, clientes por plan, matriz de qué cliente tiene cada isla, cambio de plan o estado, y add-ons o bloqueos por cliente.
 
@@ -30,7 +31,7 @@ Además incluye un **dashboard de administración interna** (`/admin`) para el e
 | Plan | Mensual | Islas |
 |---|---|---|
 | Emprende | $14.990 | Contabilidad, Reportes |
-| Local | $29.990 | + Reservas |
+| Local | $29.990 | + Reservas y Plano del local |
 | Pro | $49.990 | Todas |
 | Cadena | $99.990 (2 locales) + $39.990 por local extra | Todas + consolidado |
 

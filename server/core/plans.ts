@@ -40,22 +40,22 @@ export const PLANS: Plan[] = [
   },
   {
     id: "pro", nombre: "Local", precio_mensual: 29990, precio_anual: anual(29990),
-    descripcion: "Contabilidad, reportes y reservas de mesa con sitio público.",
-    modulos: ["contabilidad", "reportes", "reservas"],
+    descripcion: "Contabilidad, reportes, reservas con sitio público y plano del local.",
+    modulos: ["contabilidad", "reportes", "reservas", "plano"],
     limites: { usuarios: 6, mesas: 30, locales: 1, facturas_mes: 0 },
     implementacion: 0,
   },
   {
     id: "full", nombre: "Pro", precio_mensual: 49990, precio_anual: anual(49990),
     descripcion: "Todas las islas: suma llamado a mesa por QR y escaneo de facturas.",
-    modulos: ["contabilidad", "reportes", "reservas", "llamado", "facturas"],
+    modulos: ["contabilidad", "reportes", "reservas", "llamado", "facturas", "plano"],
     limites: { usuarios: 15, mesas: 60, locales: 1, facturas_mes: 150 },
     implementacion: 49990,
   },
   {
     id: "cadena", nombre: "Cadena", precio_mensual: 99990, precio_anual: anual(99990),
     descripcion: "Todas las islas para 2 locales o más, con reportes consolidados.",
-    modulos: ["contabilidad", "reportes", "reservas", "llamado", "facturas"],
+    modulos: ["contabilidad", "reportes", "reservas", "llamado", "facturas", "plano"],
     limites: { usuarios: null, mesas: 60, locales: null, facturas_mes: 200 },
     locales_incluidos: 2, precio_local_adicional: 39990,
     implementacion: 89990,
@@ -65,5 +65,5 @@ export const PLANS: Plan[] = [
 // Precio mensual de cada isla como add-on suelto (sobre cualquier plan).
 // contabilidad = 0 porque viene incluida en todos los planes.
 export const ADDON_PRICE: Record<ModuleId, number> = {
-  contabilidad: 0, reportes: 5990, reservas: 14990, llamado: 9990, facturas: 19990,
+  contabilidad: 0, reportes: 5990, reservas: 14990, llamado: 9990, facturas: 19990, plano: 6990,
 };
