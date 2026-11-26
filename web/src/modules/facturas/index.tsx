@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api, ClientModule, ModuleProps } from "../../core/types";
 import { clp } from "../../core/api";
 
-// Isla "facturas": escaneo (OCR simulado) de facturas, boletas y otros comprobantes de gasto, revisión,
+// Isla "facturas": escaneo (OCR real con Gemini o Claude, o simulado si no hay API key) de facturas, boletas y otros comprobantes de gasto, revisión,
 // confirmación como egreso, y catálogo de productos con último costo, historial e alertas de alza.
 
 type TipoDoc = "factura" | "boleta" | "otro";
@@ -17,13 +17,14 @@ interface Extraida {
   tipo_doc: TipoDoc; categoria_egreso: string; descripcion?: string;
   proveedor: string; rut: string; giro: string; folio: string; fecha: string; categoria: string;
   neto: number; iva: number; total: number; condicion_pago: string; lineas: LineaRev[];
-  confianza: number; motor: string; archivo: string | null; ejemplo: boolean; alza_pct: number;
+  confianza: number; motor: string; archivo: string | null; ejemplo: boolean; alza_pct: number; ocr_real?: boolean;
 }
 interface Factura { id: number; tipo_doc: TipoDoc; categoria_egreso: string; proveedor: string; rut: string; folio: string; fecha: string; categoria: string; neto: number; iva: number; total: number; estado: "pagada" | "por_pagar"; condicion_pago: string | null; archivo: string | null; egreso_id: number | null }
 interface Producto { id: number; nombre: string; unidad: string; categoria: string | null; proveedor: string | null; ultimo_costo: number; costo_anterior: number | null; variacion_pct: number; ultima_compra: string | null; compras: number }
 interface Resumen {
   por_pagar: { n: number; monto: number }; mes: { n: number; monto: number; iva: number }; por_tipo?: Record<TipoDoc, { n: number; monto: number }>; alzas: number; productos: number;
   proveedores: { proveedor: string; facturas: number; total: number }[]; alza_pct: number; contabilidad_conectada: boolean;
+  ocr_real?: boolean; ocr_motor?: "gemini" | "claude" | null; planilla?: boolean;
 }
 
 const fechaCl = (f: string) => { const [a, m, d] = f.split("-"); return `${d}-${m}-${a}`; };
@@ -53,7 +54,7 @@ function Pantalla({ api }: ModuleProps) {
         <button className={vista === "productos" ? "btn alt" : "btn ghost"} onClick={() => setVista("productos")}>Productos y precios</button>
       </div>
 
-      {vista === "escanear" && <Escanear api={api} onGuardada={() => { cargarResumen(); setVista("facturas"); }} />}
+      {vista === "escanear" && <Escanear api={api} ocrReal={!!resumen?.ocr_real} motorOcr={resumen?.ocr_motor ?? null} planilla={!!resumen?.planilla} onGuardada={() => { cargarResumen(); setVista("facturas"); }} />}
       {vista === "facturas" && <Facturas api={api} onCambio={cargarResumen} />}
       {vista === "productos" && <Productos api={api} />}
 
@@ -72,8 +73,29 @@ function Pantalla({ api }: ModuleProps) {
   );
 }
 
+// Achica la foto antes de subirla (las del celular pesan 3-8 MB): lado mayor 1800 px, JPEG 85%.
+// Así entra en el límite del servidor y el OCR responde más rápido. Los PDF se suben tal cual.
+async function prepararArchivo(f: File): Promise<File> {
+  if (!f.type.startsWith("image/") || f.type === "image/gif") return f;
+  try {
+    const bmp = await createImageBitmap(f, { imageOrientation: "from-image" } as ImageBitmapOptions);
+    const escala = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    if (escala === 1 && f.size < 1_500_000 && f.type === "image/jpeg") return f;
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * escala); c.height = Math.round(bmp.height * escala);
+    c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/jpeg", 0.85));
+    if (!blob) return f;
+    return new File([blob], f.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch { return f; }
+}
+
+const esTactil = () => typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+
 // ---------------- Escanear + revisar + confirmar ----------------
-function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
+const MOTOR_LABEL: Record<string, string> = { gemini: "Gemini", claude: "Claude" };
+
+function Escanear({ api, ocrReal, motorOcr, planilla, onGuardada }: { api: Api; ocrReal: boolean; motorOcr: string | null; planilla: boolean; onGuardada: () => void }) {
   const [datos, setDatos] = useState<Extraida | null>(null);
   const [estado, setEstado] = useState<"por_pagar" | "pagada">("por_pagar");
   const [cargando, setCargando] = useState(false);
@@ -81,20 +103,26 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
   const [resultado, setResultado] = useState<any>(null);
   const [tipoSubida, setTipoSubida] = useState<"auto" | TipoDoc>("auto");
   const file = useRef<HTMLInputElement>(null);
+  const camara = useRef<HTMLInputElement>(null);
+  const [vista, setVista] = useState<string | null>(null);
+  useEffect(() => () => { if (vista) URL.revokeObjectURL(vista); }, [vista]);
 
   const escanear = async (archivo?: File, tipo?: TipoDoc) => {
     setCargando(true); setErr(""); setResultado(null);
     try {
       let r: Extraida;
       if (archivo) {
+        const listo = await prepararArchivo(archivo);
+        setVista(listo.type.startsWith("image/") ? URL.createObjectURL(listo) : null);
         const fd = new FormData();
-        fd.append("archivo", archivo);
+        fd.append("archivo", listo);
         if (tipoSubida !== "auto") fd.append("tipo", tipoSubida);
         const res = await fetch("/api/m/facturas/escanear", { method: "POST", headers: { "x-tenant": tenantSlug() }, body: fd });
         const j = await res.json();
         if (!res.ok) throw new Error(j.error ?? "No se pudo leer el archivo");
         r = j;
       } else {
+        setVista(null);
         r = await api.post<Extraida>("/escanear", { tipo: tipo ?? "factura" });
       }
       setDatos(r);
@@ -109,7 +137,7 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
         tipo_doc: datos.tipo_doc, categoria_egreso: datos.categoria_egreso, descripcion: datos.descripcion,
         proveedor: datos.proveedor, rut: datos.rut, folio: datos.folio, fecha: datos.fecha, categoria: datos.categoria,
         neto: datos.neto, iva: datos.iva, total: datos.total, condicion_pago: datos.condicion_pago, archivo: datos.archivo,
-        confianza: datos.confianza, estado,
+        confianza: datos.confianza, motor: datos.motor, estado,
         lineas: datos.lineas.map((l) => ({ producto: l.producto, cantidad: l.cantidad, unidad: l.unidad, precio_unitario: l.precio_unitario, total: l.total })),
       });
       setResultado(r); setDatos(null); onGuardada();
@@ -131,6 +159,9 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
         <div className="card" style={{ background: "var(--verdeClaro)", borderColor: "var(--verde)" }}>
           <b>{resultado.tipo_label}{resultado.folio ? ` ${resultado.folio}` : ""} registrada por {clp(resultado.total)}.</b>
           <p className="muted">{resultado.egreso.ok ? `El egreso quedó anotado en contabilidad como ${catLabel(resultado.categoria_egreso)}.` : `Egreso no registrado en contabilidad (${resultado.egreso.motivo}).`}</p>
+          {resultado.planilla?.ok
+            ? <p className="muted">También quedó como fila en la planilla de Google Drive.</p>
+            : planilla && resultado.planilla && <p style={{ color: "var(--rojo)" }}>No se pudo copiar a la planilla de Google: {resultado.planilla.motivo}.</p>}
           {!!resultado.alzas?.length && (
             <ul style={{ marginTop: 8 }}>
               {resultado.alzas.map((a: any) => <li key={a.producto}>⚠️ {a.producto} subió {pct(a.variacion_pct)}: {clp(a.anterior)} → {clp(a.nuevo)} por {a.unidad}</li>)}
@@ -145,6 +176,8 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
           <p className="muted" style={{ marginTop: 4 }}>Sirve para facturas de proveedores, boletas (ferretería, supermercado, gas, luz) y otros comprobantes como recibos o vales. Saca una foto o sube el PDF: leemos los datos y lo dejamos listo como egreso.</p>
           <input ref={file} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void escanear(f); e.target.value = ""; }} />
+          <input ref={camara} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void escanear(f); e.target.value = ""; }} />
           <div className="row" style={{ marginTop: 12 }}>
             <span className="muted">¿Qué vas a subir?</span>
             {([["auto", "Detectar solo"], ["factura", "Factura"], ["boleta", "Boleta"], ["otro", "Otro comprobante"]] as const).map(([v, l]) => (
@@ -152,14 +185,17 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
             ))}
           </div>
           <div className="row" style={{ marginTop: 14 }}>
-            <button className="btn alt" disabled={cargando} onClick={() => file.current?.click()}>📷 Subir foto o PDF</button>
+            {esTactil() && <button className="btn alt" disabled={cargando} onClick={() => camara.current?.click()}>📷 Sacar foto</button>}
+            <button className={esTactil() ? "btn ghost" : "btn alt"} disabled={cargando} onClick={() => file.current?.click()}>📎 Subir foto o PDF</button>
             <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "factura")}>Factura de ejemplo</button>
             <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "boleta")}>Boleta de ejemplo</button>
             <button className="btn ghost" disabled={cargando} onClick={() => escanear(undefined, "otro")}>Comprobante de ejemplo</button>
           </div>
-          {cargando && <p className="muted" style={{ marginTop: 10 }}>Leyendo el documento…</p>}
+          {cargando && <p className="muted" style={{ marginTop: 10 }}>{ocrReal ? "Leyendo el documento (puede tardar unos 10 segundos)…" : "Leyendo el documento…"}</p>}
           {err && <p style={{ color: "var(--rojo)", marginTop: 10 }}>{err}</p>}
-          <p className="muted" style={{ marginTop: 12 }}>Prototipo: la lectura es simulada (función <code>extraerFactura()</code> en el servidor). Después se reemplaza por el OCR real sin cambiar esta pantalla.</p>
+          {ocrReal
+            ? <p className="muted" style={{ marginTop: 12 }}>La lectura la hace {MOTOR_LABEL[motorOcr ?? ""] ?? "la IA"} (IA con visión). Revisa siempre los datos antes de confirmar.{planilla ? " Cada documento confirmado se copia a la planilla de Google Drive." : ""}</p>
+            : <p className="muted" style={{ marginTop: 12 }}>⚠️ Lectura simulada: falta configurar la API key del OCR en el servidor, así que los datos de una foto real serán inventados.</p>}
         </div>
       )}
 
@@ -169,7 +205,8 @@ function Escanear({ api, onGuardada }: { api: Api; onGuardada: () => void }) {
             <h3>Revisa lo que leímos</h3>
             <span className="chip">{Math.round(datos.confianza * 100)}% de confianza</span>
           </div>
-          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : `${TIPO_LABEL[datos.tipo_doc]} de ejemplo`} · motor {datos.motor}</p>
+          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : `${TIPO_LABEL[datos.tipo_doc]} de ejemplo`} · {MOTOR_LABEL[datos.motor] ? `leído por ${MOTOR_LABEL[datos.motor]}` : "lectura simulada"}</p>
+          {vista && <img src={vista} alt="Documento subido" style={{ marginTop: 10, maxWidth: "100%", maxHeight: 260, borderRadius: 8, border: "1px solid var(--borde, #ddd)", objectFit: "contain" }} />}
 
           <div className="row" style={{ marginTop: 12 }}>
             {(["factura", "boleta", "otro"] as const).map((t) => (
