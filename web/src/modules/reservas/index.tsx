@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Api, ClientModule, ModuleProps } from "../../core/types";
 import { makeApi } from "../../core/api";
+import PlanoSvg, { Leyenda, usePlanoPublico, type EstadoVisual } from "../../core/PlanoSvg";
 
 // Isla "reservas": agenda interna del día + página pública para que el cliente final reserve.
 
@@ -244,6 +245,25 @@ function PaginaReservar({ slug }: { slug: string }) {
   const [err, setErr] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [bloqueado, setBloqueado] = useState(false);
+  // Plano del local (isla "plano"): si existe, el cliente puede elegir su mesa
+  const plano = usePlanoPublico(slug);
+  const [mesasHora, setMesasHora] = useState<{ id: number; nombre: string; capacidad: number; libre: boolean; cabe: boolean }[] | null>(null);
+  const [mesaSel, setMesaSel] = useState<number | null>(null);
+  useEffect(() => {
+    setMesaSel(null); setMesasHora(null);
+    if (!plano || !hora) return;
+    api.get<any[]>(`/public/mesas?fecha=${fecha}&hora=${hora}&personas=${personas}`).then(setMesasHora).catch(() => {});
+  }, [api, plano, fecha, hora, personas]);
+  const estadosPlano = useMemo(() => {
+    const out: Record<string, EstadoVisual> = {};
+    for (const el of plano?.elementos ?? []) {
+      if (el.tipo !== "mesa") continue;
+      const m = mesasHora?.find((x) => x.id === el.reserva_mesa_id);
+      out[el.id] = !m || !m.libre || !m.cabe ? "no_disponible" : m.id === mesaSel ? "seleccionada" : "libre";
+    }
+    return out;
+  }, [plano, mesasHora, mesaSel]);
+  const nombreMesaSel = mesasHora?.find((m) => m.id === mesaSel)?.nombre;
 
   useEffect(() => {
     setHora("");
@@ -253,7 +273,7 @@ function PaginaReservar({ slug }: { slug: string }) {
 
   const reservar = async () => {
     setEnviando(true); setErr("");
-    try { setListo(await api.post("/public/reservas", { ...datos, personas, fecha, hora })); }
+    try { setListo(await api.post("/public/reservas", { ...datos, personas, fecha, hora, mesa_id: mesaSel ?? undefined })); }
     catch (e: any) { setErr(e.message); } finally { setEnviando(false); }
   };
 
@@ -276,6 +296,12 @@ function PaginaReservar({ slug }: { slug: string }) {
           <p className="muted">{listo.personas} {listo.personas === 1 ? "persona" : "personas"}{listo.mesa ? ` · ${listo.mesa}` : ""}</p>
           <p className="muted" style={{ marginTop: 6 }}>Código: <b>{listo.codigo}</b></p>
         </div>
+        {plano && listo.mesa_id && plano.elementos.some((e) => e.reserva_mesa_id === listo.mesa_id) && (
+          <div style={{ marginTop: 14, textAlign: "left" }}>
+            <p className="muted" style={{ marginBottom: 6 }}>Tu mesa en el local:</p>
+            <PlanoSvg plano={plano} estados={Object.fromEntries(plano.elementos.filter((e) => e.tipo === "mesa").map((e) => [e.id, e.reserva_mesa_id === listo.mesa_id ? "aqui" : "atenuada"]))} />
+          </div>
+        )}
         <p className="muted" style={{ marginTop: 12 }}>Queda <b>pendiente de confirmación</b>. Te avisamos por WhatsApp al {datos.telefono}.</p>
         <button className="btn ghost" style={{ marginTop: 14 }} onClick={() => { setListo(null); setDatos({ nombre: "", telefono: "", nota: "" }); setHora(""); }}>Hacer otra reserva</button>
       </div>
@@ -322,9 +348,22 @@ function PaginaReservar({ slug }: { slug: string }) {
         {disp && !disp.horas.some((h) => h.disponible) && <p className="muted" style={{ marginTop: 10 }}>No quedan mesas para ese día. Prueba otra fecha.</p>}
       </div>
 
+      {hora && plano && (
+        <div className="card">
+          <div className="between"><h3>4. Elige tu mesa <span className="muted">(opcional)</span></h3>
+            {mesaSel && <button className="btn ghost" style={{ padding: "4px 10px" }} onClick={() => setMesaSel(null)}>Que me asignen</button>}</div>
+          <p className="muted" style={{ marginTop: 4 }}>{mesaSel ? `Elegiste ${nombreMesaSel}.` : "Toca una mesa verde. Si no eliges, te asignamos la mejor disponible."}</p>
+          <div style={{ marginTop: 10 }}>
+            <PlanoSvg plano={plano} estados={estadosPlano}
+              onTapMesa={(el) => { const m = mesasHora?.find((x) => x.id === el.reserva_mesa_id); if (m?.libre && m.cabe) setMesaSel(m.id === mesaSel ? null : m.id); }} />
+            <Leyenda estados={["libre", "seleccionada", "no_disponible"]} />
+          </div>
+        </div>
+      )}
+
       {hora && (
         <div className="card">
-          <h3>4. Tus datos</h3>
+          <h3>{plano ? "5" : "4"}. Tus datos</h3>
           <div className="stack" style={{ marginTop: 10 }}>
             <input className="input" placeholder="Nombre y apellido" value={datos.nombre} onChange={(e) => setDatos({ ...datos, nombre: e.target.value })} />
             <input className="input" placeholder="Teléfono (+56 9 ...)" inputMode="tel" value={datos.telefono} onChange={(e) => setDatos({ ...datos, telefono: e.target.value })} />
@@ -332,7 +371,7 @@ function PaginaReservar({ slug }: { slug: string }) {
           </div>
           {err && <p style={{ color: "var(--rojo)", marginTop: 10 }}>{err}</p>}
           <button className="btn alt" style={{ width: "100%", marginTop: 14, padding: "14px" }} disabled={enviando || !datos.nombre || !datos.telefono} onClick={reservar}>
-            {enviando ? "Enviando…" : `Reservar ${personas}p · ${fechaCorta(fecha)} ${hora}`}
+            {enviando ? "Enviando…" : `Reservar ${personas}p · ${fechaCorta(fecha)} ${hora}${nombreMesaSel ? ` · ${nombreMesaSel}` : ""}`}
           </button>
           <p className="muted" style={{ marginTop: 10 }}>Al reservar aceptas que te contactemos para confirmar. Si no puedes venir, avísanos.</p>
         </div>

@@ -55,6 +55,17 @@ function asignarMesa(db: Database, tid: number, fecha: string, hora: string, per
   return mesasActivas(db, tid).find((m) => m.capacidad >= personas && !ocupadas.has(m.id)) ?? null;
 }
 
+// Mesas libres en una hora puntual (para que el cliente elija su mesa en el plano)
+function mesasLibres(db: Database, tid: number, fecha: string, hora: string, excluirReserva?: number) {
+  const ocupadas = new Set<number>();
+  const ini = toMin(hora);
+  for (const r of reservasDelDia(db, tid, fecha)) {
+    if (r.id === excluirReserva || !r.mesa_id || !ACTIVOS.includes(r.estado)) continue;
+    if (solapa(ini, HORARIO.duracionMin, toMin(r.hora), r.duracion_min)) ocupadas.add(r.mesa_id);
+  }
+  return mesasActivas(db, tid).map((m) => ({ ...m, libre: !ocupadas.has(m.id) }));
+}
+
 function disponibilidad(db: Database, tid: number, fecha: string, personas: number) {
   const ahora = new Date();
   const minAhora = fecha === hoy() ? ahora.getHours() * 60 + ahora.getMinutes() + 30 : -1; // 30 min de anticipación
@@ -111,6 +122,13 @@ function crearReserva(ctx: Ctx, b: any, publico: boolean) {
     const m = ctx.db.query("SELECT id FROM reservas_mesas WHERE id = ? AND tenant_id = ?").get(Number(b.mesa_id), tid) as { id: number } | null;
     if (!m) throw new HttpError(400, "Mesa no existe");
     mesaId = m.id;
+  } else if (publico && b?.mesa_id) {
+    // El cliente eligió su mesa en el plano del local
+    const m = mesasLibres(ctx.db, tid, d.fecha, d.hora).find((x) => x.id === Number(b.mesa_id));
+    if (!m) throw new HttpError(400, "Esa mesa no existe");
+    if (m.capacidad < d.personas) throw new HttpError(409, `${m.nombre} es para ${m.capacidad} personas. Elige otra mesa.`);
+    if (!m.libre) throw new HttpError(409, `${m.nombre} ya está tomada a esa hora. Elige otra o deja que te asignemos una.`);
+    mesaId = m.id;
   } else {
     const m = asignarMesa(ctx.db, tid, d.fecha, d.hora, d.personas);
     if (!m && publico) throw new HttpError(409, "No quedan mesas para ese horario. Prueba otra hora.");
@@ -122,7 +140,7 @@ function crearReserva(ctx: Ctx, b: any, publico: boolean) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
     .get(tid, mesaId, d.nombre, d.telefono, d.email, d.personas, d.fecha, d.hora, HORARIO.duracionMin, estado, d.nota, publico ? "web" : (b?.origen ?? "interno"), codigo) as { id: number };
   const mesa = mesaId ? (ctx.db.query("SELECT nombre, zona FROM reservas_mesas WHERE id = ?").get(mesaId) as { nombre: string; zona: string }) : null;
-  return { id: r.id, codigo, estado, fecha: d.fecha, hora: d.hora, personas: d.personas, nombre: d.nombre, mesa: mesa?.nombre ?? null, zona: mesa?.zona ?? null };
+  return { id: r.id, codigo, estado, fecha: d.fecha, hora: d.hora, personas: d.personas, nombre: d.nombre, mesa_id: mesaId, mesa: mesa?.nombre ?? null, zona: mesa?.zona ?? null };
 }
 
 // ---------- seed ----------
@@ -304,9 +322,19 @@ const mod: ServerModule = {
       },
     },
     {
+      // Estado de cada mesa a una hora: libre/ocupada y si cabe el grupo (lo usa el plano en /p/:slug/reservar)
+      method: "GET", path: "/public/mesas", public: true, handler: ({ db, tenant, url }) => {
+        const fecha = url.searchParams.get("fecha") ?? hoy();
+        const hora = url.searchParams.get("hora") ?? "";
+        const personas = Math.max(1, Number(url.searchParams.get("personas") ?? 2) || 2);
+        if (!FECHA_RE.test(fecha) || !slots().includes(hora)) throw new HttpError(400, "Fecha u hora inválida");
+        return mesasLibres(db, tenant.id, fecha, hora).map((m) => ({ id: m.id, nombre: m.nombre, capacidad: m.capacidad, zona: m.zona, libre: m.libre, cabe: m.capacidad >= personas }));
+      },
+    },
+    {
       method: "POST", path: "/public/reservas", public: true, handler: async (ctx) => {
         const b = await ctx.body();
-        const res = crearReserva(ctx, { nombre: b?.nombre, telefono: b?.telefono, email: b?.email, personas: b?.personas, fecha: b?.fecha, hora: b?.hora, nota: b?.nota }, true);
+        const res = crearReserva(ctx, { nombre: b?.nombre, telefono: b?.telefono, email: b?.email, personas: b?.personas, fecha: b?.fecha, hora: b?.hora, nota: b?.nota, mesa_id: b?.mesa_id }, true);
         return { ...res, local: ctx.tenant.nombre };
       },
     },
