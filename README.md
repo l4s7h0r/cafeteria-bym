@@ -50,12 +50,12 @@ bunx vite             # web en http://localhost:5173
 | Ruta | Qué es |
 |---|---|
 | `/` | Elegir cliente de prueba |
-| `/c/papa-quique` | Sistema del local (solo muestra las islas de su plan) |
+| `/c/papa-kike` | Sistema del local (solo muestra las islas de su plan) |
 | `/admin` | Administración interna |
-| `/p/papa-quique/mesa/5` | Página pública del QR de una mesa |
-| `/p/papa-quique/reservar` | Página pública para reservar |
+| `/p/papa-kike/mesa/5` | Página pública del QR de una mesa |
+| `/p/papa-kike/reservar` | Página pública para reservar |
 
-Clientes de prueba: **Papa Quique** (Pro, piloto), **Café Los Andes** (Local), **La Tetera** (Local + add-on Llamado) y **Barista del Sur** (Emprende).
+Clientes de prueba: **Papa Kike** (Pro, piloto), **Café Los Andes** (Local), **La Tetera** (Local + add-on Llamado) y **Barista del Sur** (Emprende).
 
 ## Arquitectura
 
@@ -90,3 +90,15 @@ Bun · bun:sqlite · React 19 · Vite · TypeScript · React Router. Sin librer�
 - OCR real para facturas: reemplazar `extraerFactura()` en `server/modules/facturas/`.
 - Validar precios contra la competencia.
 - Islas futuras: inventario, fidelización, delivery, boleta electrónica SII, turnos.
+
+## Publicar la demo (Render, gratis)
+
+El servidor Bun sirve la API y también el frontend compilado (`dist/`), así que es un solo servicio.
+Cada arranque recrea la base con los datos de prueba.
+
+1. En [render.com](https://render.com) entra con GitHub.
+2. **New → Blueprint**, elige el repo `cafeteria-bym`. Render lee `render.yaml` y crea el servicio `cafeteria-bym-demo` (plan Free, Docker).
+3. Al terminar el deploy queda en `https://cafeteria-bym-demo.onrender.com` (o el nombre que asigne Render).
+
+En el plan Free el servicio se duerme tras 15 min sin visitas; la primera carga después tarda ~1 minuto.
+Para probar la imagen localmente: `docker build -t cafe . && docker run -p 3001:3001 cafe`.

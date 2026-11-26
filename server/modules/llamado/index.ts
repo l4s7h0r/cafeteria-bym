@@ -185,7 +185,7 @@ const mod: ServerModule = {
       method: "GET", path: "/qr/:mesa", handler: ({ db, tenant, params, url }) => {
         const mesa = mesaPorCodigo(db, tenant.id, params.mesa);
         if (!mesa) throw new HttpError(404, "Mesa no existe");
-        const base = (url.searchParams.get("base") ?? `http://localhost:5173`).replace(/\/$/, "");
+        const base = (url.searchParams.get("base") ?? url.origin).replace(/\/$/, "");
         const destino = `${base}/p/${tenant.slug}/mesa/${encodeURIComponent(mesa.codigo)}`;
         const svg = qrSvg(destino, Number(url.searchParams.get("escala") ?? 5));
         return new Response(svg, { headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "no-store" } });

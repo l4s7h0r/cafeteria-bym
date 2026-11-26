@@ -1,6 +1,7 @@
 // Reinicia la base con datos de prueba: `bun run seed`
 import { rmSync } from "node:fs";
-const file = process.env.DB_FILE ?? new URL("../data/cafeteria.db", import.meta.url).pathname;
+import { fileURLToPath } from "node:url";
+const file = process.env.DB_FILE ?? fileURLToPath(new URL("../data/cafeteria.db", import.meta.url));
 for (const suf of ["", "-wal", "-shm"]) rmSync(file + suf, { force: true });
 
 const { db, migrateCore } = await import("./core/db.ts");
@@ -14,9 +15,9 @@ for (const m of serverModules) m.migrate(db);
 const insPlan = db.query("INSERT INTO plans (id, nombre, precio_mensual, descripcion, modulos) VALUES (?, ?, ?, ?, ?)");
 for (const p of PLANS) insPlan.run(p.id, p.nombre, p.precio_mensual, p.descripcion, JSON.stringify(p.modulos));
 
-// Clientes de prueba (Papa Quique es el cliente piloto)
+// Clientes de prueba (Papa Kike es el cliente piloto)
 const TENANTS = [
-  { slug: "papa-quique", nombre: "Papa Quique", plan: "full", ciudad: "Santiago", contacto: "Enrique" },
+  { slug: "papa-kike", nombre: "Papa Kike", plan: "full", ciudad: "Santiago", contacto: "Enrique" },
   { slug: "cafe-andes", nombre: "Café Los Andes", plan: "pro", ciudad: "Viña del Mar", contacto: "Camila" },
   { slug: "barista-sur", nombre: "Barista del Sur", plan: "basico", ciudad: "Concepción", contacto: "Matías" },
   { slug: "la-tetera", nombre: "La Tetera", plan: "pro", ciudad: "Valparaíso", contacto: "Josefa" },
