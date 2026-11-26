@@ -92,14 +92,15 @@ Bun · bun:sqlite · React 19 · Vite · TypeScript · React Router. Sin librer�
 - Validar precios contra la competencia.
 - Islas futuras: inventario, fidelización, delivery, boleta electrónica SII, turnos.
 
-## Publicar la demo (Render, gratis)
+## Publicar la demo (Vercel)
 
-El servidor Bun sirve la API y también el frontend compilado (`dist/`), así que es un solo servicio.
-Cada arranque recrea la base con los datos de prueba.
+- El frontend compilado (`dist/`) lo sirve Vercel como sitio estático.
+- La API corre como función con runtime Bun (`api/index.ts`, configurado en `vercel.json`).
+- SQLite vive en `/tmp` y se siembra con los datos de prueba en cada arranque en frío: los cambios que se hagan en la demo no son permanentes.
 
-1. En [render.com](https://render.com) entra con GitHub.
-2. **New → Blueprint**, elige el repo `cafeteria-bym`. Render lee `render.yaml` y crea el servicio `cafeteria-bym-demo` (plan Free, Docker).
-3. Al terminar el deploy queda en `https://cafeteria-bym-demo.onrender.com` (o el nombre que asigne Render).
+```bash
+bunx vercel        # vista previa
+bunx vercel --prod # URL pública
+```
 
-En el plan Free el servicio se duerme tras 15 min sin visitas; la primera carga después tarda ~1 minuto.
-Para probar la imagen localmente: `docker build -t cafe . && docker run -p 3001:3001 cafe`.
+Fuera de Vercel también corre como un solo servicio: `bun run build && bun run start`, o con Docker (`docker build -t cafe . && docker run -p 3001:3001 cafe`).
