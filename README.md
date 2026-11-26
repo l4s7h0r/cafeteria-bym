@@ -50,12 +50,12 @@ bunx vite             # web en http://localhost:5173
 | Ruta | Qué es |
 |---|---|
 | `/` | Elegir cliente de prueba |
-| `/c/papa-quique` | Sistema del local (solo muestra las islas de su plan) |
+| `/c/papa-kike` | Sistema del local (solo muestra las islas de su plan) |
 | `/admin` | Administración interna |
-| `/p/papa-quique/mesa/5` | Página pública del QR de una mesa |
-| `/p/papa-quique/reservar` | Página pública para reservar |
+| `/p/papa-kike/mesa/5` | Página pública del QR de una mesa |
+| `/p/papa-kike/reservar` | Página pública para reservar |
 
-Clientes de prueba: **Papa Quique** (Pro, piloto), **Café Los Andes** (Local), **La Tetera** (Local + add-on Llamado) y **Barista del Sur** (Emprende).
+Clientes de prueba: **Papa Kike** (Pro, piloto), **Café Los Andes** (Local), **La Tetera** (Local + add-on Llamado) y **Barista del Sur** (Emprende).
 
 ## Arquitectura
 
@@ -90,3 +90,16 @@ Bun · bun:sqlite · React 19 · Vite · TypeScript · React Router. Sin librer�
 - OCR real para facturas: reemplazar `extraerFactura()` en `server/modules/facturas/`.
 - Validar precios contra la competencia.
 - Islas futuras: inventario, fidelización, delivery, boleta electrónica SII, turnos.
+
+## Publicar la demo (Vercel)
+
+- El frontend compilado (`dist/`) lo sirve Vercel como sitio estático.
+- La API corre como función con runtime Bun (`api/index.ts`, configurado en `vercel.json`).
+- SQLite vive en `/tmp` y se siembra con los datos de prueba en cada arranque en frío: los cambios que se hagan en la demo no son permanentes.
+
+```bash
+bunx vercel        # vista previa
+bunx vercel --prod # URL pública
+```
+
+Fuera de Vercel también corre como un solo servicio: `bun run build && bun run start`, o con Docker (`docker build -t cafe . && docker run -p 3001:3001 cafe`).

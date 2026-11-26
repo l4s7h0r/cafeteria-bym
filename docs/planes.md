@@ -61,9 +61,9 @@ Con pago anual, la puesta en marcha de Pro va **gratis**.
 |---|---|---|---|
 | Barista del Sur (Concepción) | Café de paso, 6 mesas, dueño + 1 barista, compra a 3 proveedores | **Emprende** | $14.990 |
 | La Tetera (Valparaíso) | 20 mesas, se llena los fines de semana, quiere que el cliente llame al garzón | **Local + Llamado** | $39.980 |
-| Papa Quique (Santiago, piloto) | 35 mesas, 10 personas, muchas facturas de proveedores al mes | **Pro** (anual) | $41.658 equivalente/mes |
+| Papa Kike (Santiago, piloto) | 35 mesas, 10 personas, muchas facturas de proveedores al mes | **Pro** (anual) | $41.658 equivalente/mes |
 
-Si Papa Quique abre un segundo local, pasa a **Cadena** ($99.990 por ambos, vs $99.980 de dos Pro, con usuarios ilimitados y consolidado).
+Si Papa Kike abre un segundo local, pasa a **Cadena** ($99.990 por ambos, vs $99.980 de dos Pro, con usuarios ilimitados y consolidado).
 
 ## 7. Cómo crecer el cliente (upsell)
 

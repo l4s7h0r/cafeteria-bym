@@ -1,8 +1,11 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-mkdirSync(new URL("../../data", import.meta.url).pathname, { recursive: true });
-export const DB_FILE = process.env.DB_FILE ?? new URL("../../data/cafeteria.db", import.meta.url).pathname;
+// fileURLToPath: en Windows `.pathname` deja "/C:/..." y SQLite no encuentra la ruta.
+export const DB_FILE = process.env.DB_FILE ?? fileURLToPath(new URL("../../data/cafeteria.db", import.meta.url));
+mkdirSync(dirname(DB_FILE), { recursive: true });
 export const db = new Database(DB_FILE, { create: true });
 db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 
