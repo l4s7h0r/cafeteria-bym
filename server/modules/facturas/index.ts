@@ -1,10 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { ServerModule, Tenant } from "../../core/types.ts";
 import { HttpError } from "../../core/router.ts";
-import { ErrorOcr, leerConClaude, OCR_DISPONIBLE, tipoArchivoSoportado, type LecturaOcr } from "./ocr.ts";
+import { ErrorOcr, leerDocumento, MOTOR_OCR, OCR_DISPONIBLE, tipoArchivoSoportado, type LecturaOcr } from "./ocr.ts";
 import { enviarAPlanilla, PLANILLA_CONFIGURADA } from "./planilla.ts";
 
-// Isla "facturas": escaneo de documentos de gasto (OCR real con Claude si hay ANTHROPIC_API_KEY; si no, simulado) + catálogo de productos con historial de costos.
+// Isla "facturas": escaneo de documentos de gasto (OCR real con Gemini o Claude según la API key configurada; si no, simulado) + catálogo de productos con historial de costos.
 // Documentos: factura de proveedor, boleta (ferretería, supermercado, gas, luz…) u otro comprobante (recibo, vale, flete).
 // Todos se registran como egreso. Sólo facturas y boletas de insumos alimentan el catálogo de productos.
 // Requiere la isla contabilidad (plan): al confirmar escribe el egreso en contabilidad_egresos SI esa tabla existe.
@@ -513,9 +513,9 @@ const mod: ServerModule = {
           if (bytes > MAX_BYTES) throw new HttpError(413, "El archivo pesa más de 4 MB: prueba con una foto más liviana o un PDF más corto");
           if (!tipoArchivoSoportado(subido.type)) throw new HttpError(415, "Formato no soportado: sube una foto (JPG, PNG o WEBP) o un PDF");
           try {
-            const lectura = await leerConClaude(await subido.arrayBuffer(), subido.type, tipo ? TIPO_DOC_LABEL[tipo] : undefined);
+            const { lectura, motor } = await leerDocumento(await subido.arrayBuffer(), subido.type, tipo ? TIPO_DOC_LABEL[tipo] : undefined);
             if (!lectura.legible) throw new HttpError(422, `No pudimos leer el documento: ${lectura.observacion || "la imagen no se ve clara"}. Prueba con otra foto, con buena luz y sin cortar los bordes.`);
-            datos = desdeOcr(lectura, archivo!, "claude");
+            datos = desdeOcr(lectura, archivo!, motor);
             if (tipo && tipo !== datos.tipo_doc) datos = { ...datos, tipo_doc: tipo };
           } catch (e) {
             if (e instanceof ErrorOcr) throw new HttpError(502, e.message);
@@ -627,7 +627,7 @@ const mod: ServerModule = {
         const proveedores = db.query(`SELECT proveedor, COUNT(*) AS facturas, COALESCE(SUM(total),0) AS total FROM facturas_facturas
           WHERE tenant_id = ? AND fecha >= date('now','localtime','-90 days') GROUP BY proveedor ORDER BY total DESC`).all(tid);
         const contabilidad = (() => { try { return !!(db.query("PRAGMA table_info('contabilidad_egresos')").all() as any[]).length; } catch { return false; } })();
-        return { ocr_real: OCR_DISPONIBLE(), planilla: PLANILLA_CONFIGURADA(), por_pagar: porPagar, mes, por_tipo: Object.fromEntries(TIPOS_DOC.map((t) => [t, porTipo.find((x) => x.tipo_doc === t) ?? { n: 0, monto: 0 }])), alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
+        return { ocr_real: OCR_DISPONIBLE(), ocr_motor: MOTOR_OCR(), planilla: PLANILLA_CONFIGURADA(), por_pagar: porPagar, mes, por_tipo: Object.fromEntries(TIPOS_DOC.map((t) => [t, porTipo.find((x) => x.tipo_doc === t) ?? { n: 0, monto: 0 }])), alzas: alzas.n, productos: productos.n, proveedores, alza_pct: ALZA_PCT, contabilidad_conectada: contabilidad };
       },
     },
   ],

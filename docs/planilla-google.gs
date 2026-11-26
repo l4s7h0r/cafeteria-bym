@@ -16,7 +16,7 @@ function doPost(e) {
     const hoja = libro.getSheetByName(HOJA) || libro.insertSheet(HOJA);
     if (hoja.getLastRow() === 0) hoja.appendRow(COLUMNAS);
     hoja.appendRow([new Date(), f.id, f.cliente, f.tipo, f.fecha, f.proveedor, f.rut, f.folio, f.categoria_egreso, f.categoria,
-      f.neto, f.iva, f.total, f.estado, f.condicion_pago, f.detalle, f.motor === "claude" ? "Claude (OCR)" : f.motor,
+      f.neto, f.iva, f.total, f.estado, f.condicion_pago, f.detalle, ({ gemini: "Gemini (OCR)", claude: "Claude (OCR)" })[f.motor] || f.motor,
       f.confianza, f.archivo]);
     return json_({ ok: true });
   } catch (err) {

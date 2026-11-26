@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api, ClientModule, ModuleProps } from "../../core/types";
 import { clp } from "../../core/api";
 
-// Isla "facturas": escaneo (OCR real con Claude, o simulado si no hay API key) de facturas, boletas y otros comprobantes de gasto, revisión,
+// Isla "facturas": escaneo (OCR real con Gemini o Claude, o simulado si no hay API key) de facturas, boletas y otros comprobantes de gasto, revisión,
 // confirmación como egreso, y catálogo de productos con último costo, historial e alertas de alza.
 
 type TipoDoc = "factura" | "boleta" | "otro";
@@ -24,7 +24,7 @@ interface Producto { id: number; nombre: string; unidad: string; categoria: stri
 interface Resumen {
   por_pagar: { n: number; monto: number }; mes: { n: number; monto: number; iva: number }; por_tipo?: Record<TipoDoc, { n: number; monto: number }>; alzas: number; productos: number;
   proveedores: { proveedor: string; facturas: number; total: number }[]; alza_pct: number; contabilidad_conectada: boolean;
-  ocr_real?: boolean; planilla?: boolean;
+  ocr_real?: boolean; ocr_motor?: "gemini" | "claude" | null; planilla?: boolean;
 }
 
 const fechaCl = (f: string) => { const [a, m, d] = f.split("-"); return `${d}-${m}-${a}`; };
@@ -54,7 +54,7 @@ function Pantalla({ api }: ModuleProps) {
         <button className={vista === "productos" ? "btn alt" : "btn ghost"} onClick={() => setVista("productos")}>Productos y precios</button>
       </div>
 
-      {vista === "escanear" && <Escanear api={api} ocrReal={!!resumen?.ocr_real} planilla={!!resumen?.planilla} onGuardada={() => { cargarResumen(); setVista("facturas"); }} />}
+      {vista === "escanear" && <Escanear api={api} ocrReal={!!resumen?.ocr_real} motorOcr={resumen?.ocr_motor ?? null} planilla={!!resumen?.planilla} onGuardada={() => { cargarResumen(); setVista("facturas"); }} />}
       {vista === "facturas" && <Facturas api={api} onCambio={cargarResumen} />}
       {vista === "productos" && <Productos api={api} />}
 
@@ -93,7 +93,9 @@ async function prepararArchivo(f: File): Promise<File> {
 const esTactil = () => typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
 
 // ---------------- Escanear + revisar + confirmar ----------------
-function Escanear({ api, ocrReal, planilla, onGuardada }: { api: Api; ocrReal: boolean; planilla: boolean; onGuardada: () => void }) {
+const MOTOR_LABEL: Record<string, string> = { gemini: "Gemini", claude: "Claude" };
+
+function Escanear({ api, ocrReal, motorOcr, planilla, onGuardada }: { api: Api; ocrReal: boolean; motorOcr: string | null; planilla: boolean; onGuardada: () => void }) {
   const [datos, setDatos] = useState<Extraida | null>(null);
   const [estado, setEstado] = useState<"por_pagar" | "pagada">("por_pagar");
   const [cargando, setCargando] = useState(false);
@@ -192,7 +194,7 @@ function Escanear({ api, ocrReal, planilla, onGuardada }: { api: Api; ocrReal: b
           {cargando && <p className="muted" style={{ marginTop: 10 }}>{ocrReal ? "Leyendo el documento (puede tardar unos 10 segundos)…" : "Leyendo el documento…"}</p>}
           {err && <p style={{ color: "var(--rojo)", marginTop: 10 }}>{err}</p>}
           {ocrReal
-            ? <p className="muted" style={{ marginTop: 12 }}>La lectura la hace Claude (IA con visión). Revisa siempre los datos antes de confirmar.{planilla ? " Cada documento confirmado se copia a la planilla de Google Drive." : ""}</p>
+            ? <p className="muted" style={{ marginTop: 12 }}>La lectura la hace {MOTOR_LABEL[motorOcr ?? ""] ?? "la IA"} (IA con visión). Revisa siempre los datos antes de confirmar.{planilla ? " Cada documento confirmado se copia a la planilla de Google Drive." : ""}</p>
             : <p className="muted" style={{ marginTop: 12 }}>⚠️ Lectura simulada: falta configurar la API key del OCR en el servidor, así que los datos de una foto real serán inventados.</p>}
         </div>
       )}
@@ -203,7 +205,7 @@ function Escanear({ api, ocrReal, planilla, onGuardada }: { api: Api; ocrReal: b
             <h3>Revisa lo que leímos</h3>
             <span className="chip">{Math.round(datos.confianza * 100)}% de confianza</span>
           </div>
-          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : `${TIPO_LABEL[datos.tipo_doc]} de ejemplo`} · {datos.motor === "claude" ? "leído por Claude" : "lectura simulada"}</p>
+          <p className="muted">{datos.archivo ? `Archivo: ${datos.archivo}` : `${TIPO_LABEL[datos.tipo_doc]} de ejemplo`} · {MOTOR_LABEL[datos.motor] ? `leído por ${MOTOR_LABEL[datos.motor]}` : "lectura simulada"}</p>
           {vista && <img src={vista} alt="Documento subido" style={{ marginTop: 10, maxWidth: "100%", maxHeight: 260, borderRadius: 8, border: "1px solid var(--borde, #ddd)", objectFit: "contain" }} />}
 
           <div className="row" style={{ marginTop: 12 }}>

@@ -1,11 +1,18 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { ApiError, GoogleGenAI } from "@google/genai";
 
-// OCR real de documentos de gasto con Claude (visión). Lee fotos (JPG, PNG, WEBP, GIF) y PDF.
-// Se activa con la variable de entorno ANTHROPIC_API_KEY. Sin ella, la isla sigue usando la lectura simulada.
-// Modelo configurable con OCR_MODELO (por defecto claude-opus-5-5).
+// OCR real de documentos de gasto con IA de visión. Lee fotos (JPG, PNG, WEBP, GIF) y PDF.
+// Proveedor según las variables de entorno (se usa el primero que esté):
+//   GEMINI_API_KEY    → Gemini (Google AI Studio; tiene nivel gratuito). Modelo: GEMINI_MODELO (por defecto gemini-3.8-flash).
+//   ANTHROPIC_API_KEY → Claude. Modelo: OCR_MODELO (por defecto claude-opus-5-5).
+// Sin ninguna, la isla sigue usando la lectura simulada.
 
-export const OCR_DISPONIBLE = () => !!process.env.ANTHROPIC_API_KEY;
+export type MotorOcr = "gemini" | "claude";
+export const MOTOR_OCR = (): MotorOcr | null =>
+  process.env.GEMINI_API_KEY ? "gemini" : process.env.ANTHROPIC_API_KEY ? "claude" : null;
+export const OCR_DISPONIBLE = () => MOTOR_OCR() !== null;
 const MODELO = () => process.env.OCR_MODELO || "claude-opus-5-5";
+const MODELO_GEMINI = () => process.env.GEMINI_MODELO || "gemini-3.8-flash";
 
 export interface LecturaOcr {
   legible: boolean;
@@ -70,6 +77,55 @@ export function tipoArchivoSoportado(mime: string) {
 }
 
 export class ErrorOcr extends Error {}
+
+// Lee el documento con el proveedor configurado y devuelve también cuál se usó.
+export async function leerDocumento(bytes: ArrayBuffer, mime: string, pista?: string): Promise<{ lectura: LecturaOcr; motor: MotorOcr }> {
+  if (!tipoArchivoSoportado(mime)) throw new ErrorOcr("Formato no soportado: sube una foto (JPG o PNG) o un PDF");
+  const motor = MOTOR_OCR();
+  if (motor === "gemini") return { lectura: await leerConGemini(bytes, mime, pista), motor };
+  if (motor === "claude") return { lectura: await leerConClaude(bytes, mime, pista), motor };
+  throw new ErrorOcr("OCR no configurado");
+}
+
+// Gemini acepta un subconjunto de JSON Schema: se quita additionalProperties por compatibilidad.
+const sinAdicionales = (o: unknown): unknown =>
+  Array.isArray(o) ? o.map(sinAdicionales)
+    : o && typeof o === "object" ? Object.fromEntries(Object.entries(o).filter(([k]) => k !== "additionalProperties").map(([k, v]) => [k, sinAdicionales(v)]))
+    : o;
+
+export async function leerConGemini(bytes: ArrayBuffer, mime: string, pista?: string): Promise<LecturaOcr> {
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { timeout: 55_000 } });
+  let texto: string | undefined;
+  try {
+    const r = await ai.models.generateContent({
+      model: MODELO_GEMINI(),
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: mime, data: Buffer.from(bytes).toString("base64") } },
+          { text: pista ? `El usuario indica que es: ${pista}. Lee el documento.` : "Lee el documento." },
+        ],
+      }],
+      config: { systemInstruction: INSTRUCCIONES, responseMimeType: "application/json", responseJsonSchema: sinAdicionales(ESQUEMA) },
+    });
+    texto = r.text;
+  } catch (e) {
+    if (e instanceof ApiError) {
+      if (e.status === 400 && /API key/i.test(e.message)) throw new ErrorOcr("La API key de Gemini no es válida (revisa GEMINI_API_KEY)");
+      if (e.status === 401 || e.status === 403) throw new ErrorOcr("La API key de Gemini no es válida (revisa GEMINI_API_KEY)");
+      if (e.status === 429) throw new ErrorOcr("Se alcanzó el límite gratuito de Gemini por ahora, intenta de nuevo en un minuto");
+      if (e.status === 400) throw new ErrorOcr(`No se pudo leer el archivo: ${e.message}`);
+      throw new ErrorOcr(`Error del lector (${e.status}), intenta de nuevo`);
+    }
+    throw new ErrorOcr("No se pudo conectar con Gemini, intenta de nuevo");
+  }
+  if (!texto) throw new ErrorOcr("El lector no devolvió datos, intenta con otra foto");
+  try {
+    return JSON.parse(texto) as LecturaOcr;
+  } catch {
+    throw new ErrorOcr("El lector devolvió una respuesta incompleta, intenta de nuevo");
+  }
+}
 
 export async function leerConClaude(bytes: ArrayBuffer, mime: string, pista?: string): Promise<LecturaOcr> {
   if (!tipoArchivoSoportado(mime)) throw new ErrorOcr("Formato no soportado: sube una foto (JPG o PNG) o un PDF");
